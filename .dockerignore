@@ -1,0 +1,12 @@
+.git
+.agents
+.aws
+.codex
+.env
+.env.*
+**/node_modules
+**/dist
+**/.astro
+**/.gitkeep
+README.md
+tests
