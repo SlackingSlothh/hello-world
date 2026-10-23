@@ -6,10 +6,9 @@ COPY frontend/ ./
 RUN npm run build
 
 FROM golang:1.26-bookworm AS backend-build
-WORKDIR /src
-COPY go.mod ./
-COPY cmd/ ./cmd/
-RUN CGO_ENABLED=0 go build -o /out/server ./cmd/server
+WORKDIR /src/backend
+COPY backend/ ./
+RUN CGO_ENABLED=0 go build -o /out/server .
 
 FROM debian:bookworm-slim
 WORKDIR /app
