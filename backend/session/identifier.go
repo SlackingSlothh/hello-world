@@ -11,6 +11,7 @@ type Identifier struct {
 	value string
 }
 
+// optional biar tidak kelihatan di log
 func (Identifier) String() string   { return "Secret" }
 func (Identifier) GoString() string { return "Secret" }
 
@@ -19,6 +20,7 @@ type Issued struct {
 	expiresAt  time.Time
 }
 
+// optional biar tidak kelihatan di log 
 func (Issued) String() string   { return "Secret" }
 func (Issued) GoString() string { return "Secret" }
 
@@ -31,7 +33,7 @@ func newIdentifier() (Identifier, error) {
 }
 
 func parseIdentifier(raw string) (Identifier, error) {
-	if len(raw) != 43 { // 32 bytes encoded as unpadded base64url.
+	if len(raw) != 43 {
 		return Identifier{}, ErrInvalid
 	}
 	decoded, err := base64.RawURLEncoding.Strict().DecodeString(raw)
