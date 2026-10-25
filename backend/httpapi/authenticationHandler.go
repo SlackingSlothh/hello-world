@@ -72,26 +72,7 @@ func (handler *AuthenticationHandler) checkRequest(writer http.ResponseWriter, r
 		http.Error(writer, "query parameters are not accepted", http.StatusBadRequest)
 		return false
 	}
-	origins := request.Header.Values("Origin")
-	sites := request.Header.Values("Sec-Fetch-Site")
-	if !strings.EqualFold(request.Host, handler.publicHost) || len(origins) > 1 || len(sites) > 1 {
-		http.Error(writer, "request origin rejected", http.StatusForbidden)
-		return false
-	}
-	if len(origins) == 1 {
-		if origins[0] != handler.publicOrigin {
-			http.Error(writer, "request origin rejected", http.StatusForbidden)
-			return false
-		}
-	} else if request.Header.Get("Sec-Fetch-Site") != "same-origin" {
-		http.Error(writer, "request origin required", http.StatusForbidden)
-		return false
-	}
-	if err := handler.originGuard.Check(request); err != nil {
-		http.Error(writer, "request origin rejected", http.StatusForbidden)
-		return false
-	}
-	return true
+	return handler.checkOrigin(writer, request)
 }
 
 func readAuthForm(writer http.ResponseWriter, request *http.Request) bool {
