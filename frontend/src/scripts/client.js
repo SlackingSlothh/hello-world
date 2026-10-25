@@ -1,4 +1,7 @@
 import Alpine from 'alpinejs';
+import databaseWorkspace from './databaseWorkspace.js';
+
+Alpine.data('databaseWorkspace', databaseWorkspace);
 
 const apiBase = (document.documentElement.dataset.apiBase || '').replace(/\/+$/, '');
 const apiURL = (path) => `${apiBase}${path}`;
@@ -30,6 +33,7 @@ Alpine.data('connectionDashboard', (admin = false) => ({
 	filter: '',
 	busy: '',
 	init() {
+		window.addEventListener('datadock:workspace-error', event => { this.error = event.detail; });
 		this.loadConnections();
 	},
 	async loadConnections() {
