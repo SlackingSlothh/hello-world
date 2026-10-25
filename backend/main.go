@@ -21,6 +21,7 @@ import (
 	postgrescatalog "hello-world/dialect/postgres"
 	"hello-world/handler"
 	"hello-world/manageddb"
+	"hello-world/migration"
 	"hello-world/migrations"
 	"hello-world/persistence"
 	"hello-world/server"
@@ -89,7 +90,16 @@ func run() error {
 		"mysql":    func(db *sql.DB) dbops.CatalogReader { return mysqlcatalog.Reader{DB: db} },
 		"mariadb":  func(db *sql.DB) dbops.CatalogReader { return mysqlcatalog.Reader{DB: db} },
 	}}
-	databaseAPI := handler.New(connections, catalogService, accessapp.Service{Store: authStore}, handler.NewSecurity(application.Authentication, application.Authorization))
+	migrationStore := migration.NewPostgresStore(storeDB)
+	migrationConnector := migration.NewSQLTargetConnectorWithResolver(func(ctx context.Context, databaseID string) (*sql.DB, string, error) {
+		connection, db, err := registry.ConnectionDB(databaseID)
+		if err != nil {
+			return nil, "", err
+		}
+		return db, connection.Driver, nil
+	})
+	migrationService := migration.NewService(migration.AccessAuthorizer{Reader: authStore}, migrationStore, migrationConnector, nil)
+	databaseAPI := handler.New(connections, catalogService, accessapp.Service{Store: authStore}, handler.NewSecurity(application.Authentication, application.Authorization), migrationService)
 	if err := application.HandleRoute("/api/v1/", databaseAPI); err != nil {
 		_ = registry.Close()
 		return err
