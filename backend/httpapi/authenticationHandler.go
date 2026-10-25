@@ -21,6 +21,7 @@ type Authenticator interface {
 type Sessions interface {
 	StartAfterLogin(context.Context, string, session.Identifier) (session.Issued, error)
 	Logout(context.Context, session.Identifier) error
+	Validate(context.Context, session.Identifier) (session.Validated, error)
 }
 
 type AuthenticationHandler struct {
