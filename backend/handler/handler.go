@@ -16,6 +16,7 @@ import (
 	"hello-world/authz"
 	"hello-world/dbops"
 	"hello-world/manageddb"
+	"hello-world/migration"
 )
 
 const maxRequestBody = 1 << 20
@@ -24,6 +25,7 @@ type Handler struct {
 	connections connectionapp.Service
 	catalog     catalogapp.Service
 	access      accessapp.Service
+	migrations  *migration.Service
 	mux         *http.ServeMux
 	security    Security
 }
@@ -35,8 +37,8 @@ type connectionRequest struct {
 	Pool   manageddb.PoolConfig `json:"pool"`
 }
 
-func New(connections connectionapp.Service, catalog catalogapp.Service, access accessapp.Service, security Security) http.Handler {
-	h := &Handler{connections: connections, catalog: catalog, access: access, mux: http.NewServeMux(), security: security}
+func New(connections connectionapp.Service, catalog catalogapp.Service, access accessapp.Service, security Security, migrations *migration.Service) http.Handler {
+	h := &Handler{connections: connections, catalog: catalog, access: access, migrations: migrations, mux: http.NewServeMux(), security: security}
 	h.routes()
 	return h.recover(h.withTimeout(h.mux))
 }
@@ -68,6 +70,13 @@ func (h *Handler) routes() {
 	h.mux.Handle("GET /api/v1/connections/{id}/schemas/{schema}/tables/{table}/indexes", connectionUser(authz.ReadSchema, h.indexes))
 	h.mux.Handle("GET /api/v1/connections/{id}/schemas/{schema}/tables/{table}/rows", connectionUser(authz.ReadData, h.rows))
 	h.mux.Handle("POST /api/v1/connections/{id}/query", connectionUser(authz.ReadData, h.selectQuery))
+	h.mux.Handle("GET /api/v1/connections/{id}/migrations", connectionUser(authz.ReadMigration, h.listMigrations))
+	h.mux.Handle("GET /api/v1/connections/{id}/migrations/{migrationID}", connectionUser(authz.ReadMigration, h.getMigration))
+	h.mux.Handle("POST /api/v1/connections/{id}/migrations", connectionUser(authz.CreateMigration, h.createMigration))
+	h.mux.Handle("PATCH /api/v1/connections/{id}/migrations/{migrationID}", connectionUser(authz.UpdateMigration, h.updateMigration))
+	h.mux.Handle("POST /api/v1/connections/{id}/migrations/{migrationID}/execute", connectionUser(authz.ExecuteMigration, h.executeMigration))
+	h.mux.Handle("POST /api/v1/connections/{id}/migrations/explain", connectionUser(authz.ExecuteMigration, h.explainMigration))
+	h.mux.Handle("POST /api/v1/connections/{id}/migrations/schema-diff", connectionUser(authz.ReadMigration, h.schemaDiff))
 }
 
 type connectionOption struct {
