@@ -1,0 +1,31 @@
+---
+import Layout from '../layouts/Layout.astro';
+---
+
+<Layout title="Sign in · DataDock">
+	<section class="mx-auto max-w-md py-6 sm:py-12" x-data="loginForm()">
+		<div class="mb-7">
+			<p class="mb-2 text-sm font-medium text-indigo-600">DataDock workspace</p>
+			<h1 class="text-3xl font-semibold tracking-tight text-slate-950">Sign in</h1>
+			<p class="mt-2 text-sm leading-6 text-slate-500">Enter your account credentials to continue to your database workspace.</p>
+		</div>
+
+		<form @submit.prevent="submit()" class="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm sm:p-8">
+			<div x-show="error" x-cloak class="mb-6 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800" role="alert" x-text="error"></div>
+			<div class="space-y-5">
+				<label class="block text-sm font-medium text-slate-700">
+					Username
+					<input class="field mt-2" x-model="username" type="text" name="username" autocomplete="username" required maxlength="100" autofocus />
+				</label>
+				<label class="block text-sm font-medium text-slate-700">
+					Password
+					<input class="field mt-2" x-model="password" type="password" name="password" autocomplete="current-password" required />
+				</label>
+			</div>
+			<button class="button-primary mt-7 w-full" type="submit" :disabled="submitting">
+				<span x-text="submitting ? 'Signing in…' : 'Sign in'"></span>
+			</button>
+		</form>
+		<p class="mt-5 text-center text-xs leading-5 text-slate-500">Your session is stored in a secure, HttpOnly cookie. Your password is sent only to the configured backend API.</p>
+	</section>
+</Layout>
