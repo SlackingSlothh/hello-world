@@ -34,8 +34,9 @@ type Store interface {
 }
 
 type Service struct {
-	Store Store
-	Users UserStore
+	Store  Store
+	Users  UserStore
+	Groups GroupStore
 }
 
 func (s Service) List(ctx context.Context) ([]Group, error) {

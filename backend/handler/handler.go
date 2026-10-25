@@ -61,6 +61,7 @@ func (h *Handler) routes() {
 	h.mux.Handle("POST /api/v1/connections/{id}/disconnect", admin(h.disconnectConnection))
 	h.mux.Handle("POST /api/v1/access/users", admin(h.createUser))
 	h.mux.Handle("GET /api/v1/access/groups", admin(h.listGroupAccess))
+	h.mux.Handle("POST /api/v1/access/groups", admin(h.createGroup))
 	h.mux.Handle("PUT /api/v1/access/groups/{groupID}/connections/{connectionID}", admin(h.setGroupAccess))
 	h.mux.Handle("DELETE /api/v1/access/groups/{groupID}/connections/{connectionID}", admin(h.deleteGroupAccess))
 	h.mux.Handle("GET /api/v1/connections/{id}/schemas", connectionUser(authz.ReadSchema, h.schemas))

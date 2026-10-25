@@ -99,7 +99,7 @@ func run() error {
 		return db, connection.Driver, nil
 	})
 	migrationService := migration.NewService(migration.AccessAuthorizer{Reader: authStore}, migrationStore, migrationConnector, nil)
-	databaseAPI := handler.New(connections, catalogService, accessapp.Service{Store: authStore, Users: authStore}, handler.NewSecurity(application.Authentication, application.Authorization), migrationService)
+	databaseAPI := handler.New(connections, catalogService, accessapp.Service{Store: authStore, Users: authStore, Groups: authStore}, handler.NewSecurity(application.Authentication, application.Authorization), migrationService)
 	if err := application.HandleRoute("/api/v1/", databaseAPI); err != nil {
 		_ = registry.Close()
 		return err

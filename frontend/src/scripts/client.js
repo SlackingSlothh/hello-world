@@ -111,6 +111,7 @@ Alpine.data('newConnectionForm', () => ({
 
 Alpine.data('groupAccessManager', () => ({
 	groups: [],
+	groupName: '',
 	connections: [],
 	groupID: '',
 	databaseID: '',
@@ -120,6 +121,29 @@ Alpine.data('groupAccessManager', () => ({
 	error: '',
 	notice: '',
 	init() { this.load(); },
+	async createGroup() {
+		if (this.busy || this.loading) return;
+		this.busy = true;
+		this.error = '';
+		this.notice = '';
+		try {
+			const response = await fetch(apiURL('/api/v1/access/groups'), {
+				method: 'POST', credentials: 'include',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ name: this.groupName }),
+			});
+			if (response.status === 401) throw new Error('Your session has expired. Sign in again.');
+			if (response.status === 403) throw new Error('Only platform admins can add groups.');
+			const result = await response.json().catch(() => ({}));
+			if (!response.ok) throw new Error(result.error?.message || 'Could not add group.');
+			this.groups.push(result);
+			this.groups.sort((a, b) => a.name.localeCompare(b.name));
+			this.groupID = result.id;
+			this.groupName = '';
+			this.notice = `Group “${result.name}” added without members or database access.`;
+		} catch (error) { this.error = error.message || 'Could not add group.'; }
+		finally { this.busy = false; }
+	},
 	async load() {
 		this.loading = true;
 		this.error = '';
