@@ -1,0 +1,4 @@
+CREATE TABLE IF NOT EXISTS access_groups (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE
+);
