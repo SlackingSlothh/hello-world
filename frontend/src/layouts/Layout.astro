@@ -1,23 +1,33 @@
+---
+import '../styles/global.css';
+const { title = 'DataDock', showLogout = false } = Astro.props;
+---
 <!doctype html>
-<html lang="en">
+<html lang="en" data-api-base={import.meta.env.PUBLIC_API_BASE_URL ?? ''}>
 	<head>
 		<meta charset="utf-8" />
-		<meta name="viewport" content="width=device-width" />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
 		<link rel="icon" type="image/svg+xml" href="/favicon.svg" />
-		<link rel="icon" href="/favicon.ico" />
 		<meta name="generator" content={Astro.generator} />
-		<title>Astro Basics</title>
+		<meta name="description" content="Manage your database connections" />
+		<title>{title}</title>
 	</head>
 	<body>
-		<slot />
+		<div class="min-h-screen lg:grid lg:grid-cols-[248px_1fr]">
+			<aside class="border-b border-slate-200 bg-white px-5 py-5 lg:min-h-screen lg:border-b-0 lg:border-r lg:px-6 lg:py-8">
+				<nav class="flex gap-2 lg:flex-col" aria-label="Main navigation">
+					{showLogout ? <button class="nav-link text-left" type="button" data-logout>Sign out</button> : <a class="nav-link" href="/login">Sign in</a>}
+					<a class="nav-link" href="/db"><span>◫</span> Databases</a>
+					<a class="nav-link" href="/admin/db"><span>⚙</span> Manage connections</a>
+					<a class="nav-link" href="/admin/access"><span>♙</span> Group access</a>
+				</nav>
+			</aside>
+			<main class="min-w-0 px-5 py-7 sm:px-8 lg:px-12 lg:py-10">
+				<slot />
+			</main>
+		</div>
+		<script>
+			import '../scripts/client.js';
+		</script>
 	</body>
 </html>
-
-<style>
-	html,
-	body {
-		margin: 0;
-		width: 100%;
-		height: 100%;
-	}
-</style>
