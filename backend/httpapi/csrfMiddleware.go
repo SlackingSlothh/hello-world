@@ -2,7 +2,6 @@ package httpapi
 
 import (
 	"net/http"
-	"strings"
 )
 
 func (handler *AuthenticationHandler) RequireSameOrigin(next http.Handler) http.Handler {
@@ -23,7 +22,7 @@ func (handler *AuthenticationHandler) RequireSameOrigin(next http.Handler) http.
 func (handler *AuthenticationHandler) checkOrigin(writer http.ResponseWriter, request *http.Request) bool {
 	origins := request.Header.Values("Origin")
 	sites := request.Header.Values("Sec-Fetch-Site")
-	if !strings.EqualFold(request.Host, handler.publicHost) || len(origins) > 1 || len(sites) > 1 {
+	if len(origins) > 1 || len(sites) > 1 {
 		http.Error(writer, "request origin rejected", http.StatusForbidden)
 		return false
 	}
