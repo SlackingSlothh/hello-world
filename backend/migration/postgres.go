@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"fmt"
 	"time"
 )
 
@@ -142,6 +141,26 @@ func (ps *PostgresStore) UpdateDraftSQL(ctx context.Context, migrationID int64, 
 
 // CreateRun menyisipkan baris percobaan baru pada tabel migration_runs
 func (ps *PostgresStore) CreateRun(ctx context.Context, run *MigrationRun) error {
+	tx, err := ps.platformDB.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	var databaseID string
+	if err := tx.QueryRowContext(ctx, `SELECT database_id FROM migrations WHERE id = $1 FOR UPDATE`, run.MigrationID).Scan(&databaseID); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrNotFound
+		}
+		return err
+	}
+	if databaseID != run.DatabaseID {
+		return ErrDatabaseMismatch
+	}
+	if err := tx.QueryRowContext(ctx, `SELECT COALESCE(MAX(attempt_number), 0) + 1 FROM migration_runs WHERE migration_id = $1`, run.MigrationID).Scan(&run.AttemptNumber); err != nil {
+		return err
+	}
+
 	const query = `
 		INSERT INTO migration_runs (
 			migration_id, database_id, attempt_number, sql_snapshot,
@@ -149,11 +168,14 @@ func (ps *PostgresStore) CreateRun(ctx context.Context, run *MigrationRun) error
 		) VALUES ($1, $2, $3, $4, $5, $6, 0, $7)
 		RETURNING id
 	`
-	return ps.platformDB.QueryRowContext(
+	if err := tx.QueryRowContext(
 		ctx, query,
 		run.MigrationID, run.DatabaseID, run.AttemptNumber, run.SQLSnapshot,
 		string(run.Status), run.ExecutedBy, run.StartedAt,
-	).Scan(&run.ID)
+	).Scan(&run.ID); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // CompleteRunFailed mencatat hasil percobaan yang gagal (setelah Target DB di-rollback)
@@ -189,7 +211,7 @@ func (ps *PostgresStore) CompleteRunFailed(ctx context.Context, runID, migration
 	return tx.Commit()
 }
 
-// CompleteRunSucceeded menetapkan nomor versi berikutnya 
+// CompleteRunSucceeded menetapkan nomor versi berikutnya
 func (ps *PostgresStore) CompleteRunSucceeded(ctx context.Context, runID, migrationID int64, databaseID string, execMs int64, finishedAt time.Time) (int64, error) {
 	tx, err := ps.platformDB.BeginTx(ctx, nil)
 	if err != nil {
@@ -283,120 +305,4 @@ func (ps *PostgresStore) ListRunsByMigration(ctx context.Context, migrationID in
 		runs = append(runs, r)
 	}
 	return runs, rows.Err()
-}
-
-// TARGET DATABASE
-type TargetDBProvider func(ctx context.Context, databaseID string) (*sql.DB, error)
-
-type SQLTargetConnector struct {
-	getTargetDB TargetDBProvider
-}
-
-func NewSQLTargetConnector(provider TargetDBProvider) *SQLTargetConnector {
-	return &SQLTargetConnector{getTargetDB: provider}
-}
-
-func (c *SQLTargetConnector) BeginTargetTx(ctx context.Context, databaseID string) (TargetTx, error) {
-	if c.getTargetDB == nil {
-		return nil, errors.New("provider koneksi database target belum dikonfigurasi")
-	}
-	targetDB, err := c.getTargetDB(ctx, databaseID)
-	if err != nil {
-		return nil, err
-	}
-	tx, err := targetDB.BeginTx(ctx, nil)
-	if err != nil {
-		return nil, err
-	}
-	return &sqlTargetTx{tx: tx}, nil
-}
-
-type sqlTargetTx struct {
-	tx *sql.Tx
-}
-
-func (t *sqlTargetTx) AcquireTargetLock(ctx context.Context, databaseID string) error {
-	lockKey := AdvisoryLockKey(databaseID)
-	_, err := t.tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock($1)`, lockKey)
-	return err
-}
-
-func (t *sqlTargetTx) ExecSQL(ctx context.Context, sqlQuery string) error {
-	_, err := t.tx.ExecContext(ctx, sqlQuery)
-	return err
-}
-
-func (t *sqlTargetTx) ExplainSQL(ctx context.Context, sqlQuery string, analyze bool) (string, error) {
-	prefix := "EXPLAIN (FORMAT JSON) "
-	if analyze {
-		prefix = "EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) "
-	}
-	var jsonPlan string
-	if err := t.tx.QueryRowContext(ctx, prefix+sqlQuery).Scan(&jsonPlan); err != nil {
-		return "", err
-	}
-	return jsonPlan, nil
-}
-
-func (t *sqlTargetTx) InspectSchema(ctx context.Context, schemaName string) ([]TableSchema, error) {
-	const query = `
-		SELECT
-			c.table_name,
-			c.column_name,
-			c.data_type,
-			(c.is_nullable = 'YES') AS is_nullable,
-			c.column_default
-		FROM information_schema.columns c
-		JOIN information_schema.tables tbl
-		  ON tbl.table_schema = c.table_schema
-		 AND tbl.table_name = c.table_name
-		WHERE c.table_schema = $1
-		  AND tbl.table_type = 'BASE TABLE'
-		ORDER BY c.table_name ASC, c.ordinal_position ASC
-	`
-	rows, err := t.tx.QueryContext(ctx, query, schemaName)
-	if err != nil {
-		return nil, fmt.Errorf("gagal membaca information_schema: %w", err)
-	}
-	defer rows.Close()
-
-	tableIndex := make(map[string]int)
-	var tables []TableSchema
-
-	for rows.Next() {
-		var tName, colName, dataType string
-		var isNullable bool
-		var colDefault sql.NullString
-
-		if err := rows.Scan(&tName, &colName, &dataType, &isNullable, &colDefault); err != nil {
-			return nil, err
-		}
-
-		idx, exists := tableIndex[tName]
-		if !exists {
-			idx = len(tables)
-			tableIndex[tName] = idx
-			tables = append(tables, TableSchema{TableName: tName})
-		}
-
-		col := ColumnSchema{
-			Name:       colName,
-			DataType:   dataType,
-			IsNullable: isNullable,
-		}
-		if colDefault.Valid {
-			def := colDefault.String
-			col.DefaultVal = &def
-		}
-		tables[idx].Columns = append(tables[idx].Columns, col)
-	}
-	return tables, rows.Err()
-}
-
-func (t *sqlTargetTx) Commit(ctx context.Context) error {
-	return t.tx.Commit()
-}
-
-func (t *sqlTargetTx) Rollback(ctx context.Context) error {
-	return t.tx.Rollback()
 }
