@@ -1,0 +1,18 @@
+<section class="mx-auto max-w-3xl" x-data="newConnectionForm()">
+	<div class="mb-7"><a href="/admin/db" class="text-sm font-medium text-slate-500 hover:text-slate-900">← Back to connections</a><p class="mb-2 mt-6 text-sm font-medium text-indigo-600">Administration / New connection</p><h1 class="text-3xl font-semibold tracking-tight">Add a database</h1><p class="mt-2 text-sm leading-6 text-slate-500">Save a connection and verify that the target database is reachable.</p></div>
+	<form @submit.prevent="submit()" class="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm sm:p-8">
+		<div x-show="error" x-cloak class="mb-6 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800" role="alert" x-text="error"></div>
+		<div class="grid gap-5 sm:grid-cols-2">
+			<label class="block text-sm font-medium text-slate-700">Connection name<input class="field mt-2" x-model="name" type="text" required maxlength="100" placeholder="Production analytics" /></label>
+			<label class="block text-sm font-medium text-slate-700">Database engine<select class="field mt-2" x-model="driver"><option value="postgres">PostgreSQL</option><option value="mysql">MySQL</option><option value="mariadb">MariaDB</option></select></label>
+			<label class="block text-sm font-medium text-slate-700 sm:col-span-2">Connection string (DSN)<input class="field mt-2 font-mono text-xs" x-model="dsn" type="password" autocomplete="new-password" required placeholder="postgres://user:password@host:5432/database?sslmode=require" /><span class="mt-2 block text-xs font-normal leading-5 text-slate-500">Credentials are encrypted before the connection is saved. They are never returned by the API.</span></label>
+		</div>
+		<div class="my-7 border-t border-slate-100"></div>
+		<div><h2 class="font-semibold">Connection pool</h2><p class="mt-1 text-sm text-slate-500">Set limits for this database connection.</p></div>
+		<div class="mt-5 grid gap-5 sm:grid-cols-2">
+			<label class="block text-sm font-medium text-slate-700">Maximum open connections<input class="field mt-2" x-model.number="maxOpen" type="number" min="0" max="1000" /></label>
+			<label class="block text-sm font-medium text-slate-700">Maximum idle connections<input class="field mt-2" x-model.number="maxIdle" type="number" min="0" max="1000" /></label>
+		</div>
+		<div class="mt-8 flex flex-col-reverse justify-end gap-3 sm:flex-row"><a class="button-secondary" href="/admin/db">Cancel</a><button class="button-primary" type="submit" :disabled="submitting"><span x-text="submitting ? 'Connecting…' : 'Create connection'"></span></button></div>
+	</form>
+</section>
