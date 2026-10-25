@@ -27,7 +27,6 @@ type Application struct {
 
 func New(config Config, dependencies Dependencies) (*Application, error) {
 	mux := http.NewServeMux()
-	mux.Handle("/", http.FileServer(http.Dir(config.FrontendDirectory)))
 	application := &Application{
 		mux: mux,
 		HTTP: &http.Server{
@@ -44,6 +43,8 @@ func New(config Config, dependencies Dependencies) (*Application, error) {
 		})
 		mux.Handle("/auth/login", unavailable)
 		mux.Handle("/auth/logout", unavailable)
+		mux.Handle("GET /auth/session", unavailable)
+		mux.Handle("GET /auth/admin-session", unavailable)
 		return application, nil
 	}
 	if dependencies.Users == nil || dependencies.Sessions == nil || dependencies.Access == nil {
@@ -73,6 +74,14 @@ func New(config Config, dependencies Dependencies) (*Application, error) {
 	if err != nil {
 		return nil, err
 	}
+	sessionStatus := http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		writer.Header().Set("Cache-Control", "no-store")
+		writer.WriteHeader(http.StatusNoContent)
+	})
+	mux.Handle("GET /auth/session", application.Authentication.RequireSession(sessionStatus))
+	mux.Handle("GET /auth/admin-session", application.Authentication.RequireSession(
+		application.Authorization.RequirePermission(authz.ManageConnections, "", sessionStatus),
+	))
 	mux.Handle("/auth/", application.Authentication.Routes())
 	application.HTTP.Handler = application.Authentication.RequireSameOrigin(mux)
 	return application, nil
@@ -85,5 +94,15 @@ func (application *Application) HandleProtected(pattern string, action authz.Act
 	application.mux.Handle(pattern, application.Authentication.RequireSession(
 		application.Authorization.RequirePermission(action, databasePathParameter, handler),
 	))
+	return nil
+}
+
+// HandleRoute mounts an already secured API subtree. Authentication and
+// authorization must be applied by the route handler before calling this.
+func (application *Application) HandleRoute(pattern string, handler http.Handler) error {
+	if handler == nil {
+		return errors.New("route handler is required")
+	}
+	application.mux.Handle(pattern, handler)
 	return nil
 }
