@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"errors"
 	"net/http"
 
@@ -9,6 +10,22 @@ import (
 
 type AuthorizationHandler struct {
 	accessReader authz.AccessReader
+}
+
+// CanAccess reports whether the identified user may perform an action on a
+// database, allowing list endpoints to hide databases without a grant.
+func (handler *AuthorizationHandler) CanAccess(ctx context.Context, userID string, action authz.Action, databaseID string) (bool, error) {
+	if userID == "" {
+		return false, nil
+	}
+	access, err := handler.accessReader.LoadAccess(ctx, userID)
+	if err != nil {
+		return false, err
+	}
+	if access.UserID != userID {
+		return false, errors.New("access reader returned a mismatched user")
+	}
+	return authz.Authorize(access, action, databaseID) == nil, nil
 }
 
 func NewAuthorizationHandler(accessReader authz.AccessReader) (*AuthorizationHandler, error) {
