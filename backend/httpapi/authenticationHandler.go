@@ -29,7 +29,6 @@ type AuthenticationHandler struct {
 	sessions      Sessions
 	cookies       session.Cookies
 	publicOrigin  string
-	publicHost    string
 	originGuard   *http.CrossOriginProtection
 }
 
@@ -47,10 +46,14 @@ func NewAuthenticationHandler(authenticator Authenticator, sessions Sessions, co
 	if (origin.Scheme == "http") != cookies.AllowInsecureLocalHTTP {
 		return nil, errors.New("cookie security must match the configured public origin")
 	}
+	guard := http.NewCrossOriginProtection()
+	if err := guard.AddTrustedOrigin(origin.Scheme + "://" + origin.Host); err != nil {
+		return nil, errors.New("invalid trusted public origin")
+	}
 	return &AuthenticationHandler{
 		authenticator: authenticator, sessions: sessions, cookies: cookies,
-		publicOrigin: origin.Scheme + "://" + origin.Host, publicHost: origin.Host,
-		originGuard: http.NewCrossOriginProtection(),
+		publicOrigin: origin.Scheme + "://" + origin.Host,
+		originGuard:  guard,
 	}, nil
 }
 
