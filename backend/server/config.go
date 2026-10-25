@@ -8,7 +8,6 @@ import (
 
 type Config struct {
 	Address                string
-	FrontendDirectory      string
 	PublicOrigin           string
 	AllowInsecureLocalHTTP bool
 	SessionEncryptionKey   []byte
@@ -16,15 +15,11 @@ type Config struct {
 
 func ReadConfig(getenv func(string) string) (Config, error) {
 	config := Config{
-		Address:           getenv("HTTP_ADDR"),
-		FrontendDirectory: getenv("FRONTEND_DIR"),
-		PublicOrigin:      getenv("PUBLIC_ORIGIN"),
+		Address:      getenv("HTTP_ADDR"),
+		PublicOrigin: getenv("PUBLIC_ORIGIN"),
 	}
 	if config.Address == "" {
 		config.Address = ":8080"
-	}
-	if config.FrontendDirectory == "" {
-		config.FrontendDirectory = "frontend/dist"
 	}
 	if value := getenv("ALLOW_INSECURE_LOCAL_HTTP"); value != "" {
 		allow, err := strconv.ParseBool(value)
