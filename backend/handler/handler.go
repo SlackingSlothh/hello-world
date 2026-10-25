@@ -16,6 +16,7 @@ import (
 	"hello-world/authz"
 	"hello-world/dbops"
 	"hello-world/manageddb"
+	"hello-world/migration"
 )
 
 const maxRequestBody = 1 << 20
@@ -24,6 +25,7 @@ type Handler struct {
 	connections connectionapp.Service
 	catalog     catalogapp.Service
 	access      accessapp.Service
+	migrations  *migration.Service
 	mux         *http.ServeMux
 	security    Security
 }
@@ -35,8 +37,8 @@ type connectionRequest struct {
 	Pool   manageddb.PoolConfig `json:"pool"`
 }
 
-func New(connections connectionapp.Service, catalog catalogapp.Service, access accessapp.Service, security Security) http.Handler {
-	h := &Handler{connections: connections, catalog: catalog, access: access, mux: http.NewServeMux(), security: security}
+func New(connections connectionapp.Service, catalog catalogapp.Service, access accessapp.Service, security Security, migrations *migration.Service) http.Handler {
+	h := &Handler{connections: connections, catalog: catalog, access: access, migrations: migrations, mux: http.NewServeMux(), security: security}
 	h.routes()
 	return h.recover(h.withTimeout(h.mux))
 }
@@ -52,12 +54,18 @@ func (h *Handler) routes() {
 	h.mux.Handle("GET /api/v1/connections", user(h.listConnections))
 	h.mux.Handle("POST /api/v1/connections", admin(h.createConnection))
 	h.mux.Handle("GET /api/v1/connections/{id}", connectionUser(authz.ReadSchema, h.getConnection))
+	h.mux.Handle("GET /api/v1/connections/{id}/settings", admin(h.getConnection))
 	h.mux.Handle("PATCH /api/v1/connections/{id}", admin(h.updateConnection))
 	h.mux.Handle("DELETE /api/v1/connections/{id}", admin(h.deleteConnection))
 	h.mux.Handle("POST /api/v1/connections/{id}/test", connectionUser(authz.ReadSchema, h.testConnection))
 	h.mux.Handle("POST /api/v1/connections/{id}/connect", admin(h.connectConnection))
 	h.mux.Handle("POST /api/v1/connections/{id}/disconnect", admin(h.disconnectConnection))
+	h.mux.Handle("POST /api/v1/access/users", admin(h.createUser))
 	h.mux.Handle("GET /api/v1/access/groups", admin(h.listGroupAccess))
+	h.mux.Handle("POST /api/v1/access/groups", admin(h.createGroup))
+	h.mux.Handle("GET /api/v1/access/groups/{groupID}/members", admin(h.listGroupMembers))
+	h.mux.Handle("PUT /api/v1/access/groups/{groupID}/members/{userID}", admin(h.setGroupMember))
+	h.mux.Handle("DELETE /api/v1/access/groups/{groupID}/members/{userID}", admin(h.setGroupMember))
 	h.mux.Handle("PUT /api/v1/access/groups/{groupID}/connections/{connectionID}", admin(h.setGroupAccess))
 	h.mux.Handle("DELETE /api/v1/access/groups/{groupID}/connections/{connectionID}", admin(h.deleteGroupAccess))
 	h.mux.Handle("GET /api/v1/connections/{id}/schemas", connectionUser(authz.ReadSchema, h.schemas))
@@ -68,6 +76,13 @@ func (h *Handler) routes() {
 	h.mux.Handle("GET /api/v1/connections/{id}/schemas/{schema}/tables/{table}/indexes", connectionUser(authz.ReadSchema, h.indexes))
 	h.mux.Handle("GET /api/v1/connections/{id}/schemas/{schema}/tables/{table}/rows", connectionUser(authz.ReadData, h.rows))
 	h.mux.Handle("POST /api/v1/connections/{id}/query", connectionUser(authz.ReadData, h.selectQuery))
+	h.mux.Handle("GET /api/v1/connections/{id}/migrations", connectionUser(authz.ReadMigration, h.listMigrations))
+	h.mux.Handle("GET /api/v1/connections/{id}/migrations/{migrationID}", connectionUser(authz.ReadMigration, h.getMigration))
+	h.mux.Handle("POST /api/v1/connections/{id}/migrations", connectionUser(authz.CreateMigration, h.createMigration))
+	h.mux.Handle("PATCH /api/v1/connections/{id}/migrations/{migrationID}", connectionUser(authz.UpdateMigration, h.updateMigration))
+	h.mux.Handle("POST /api/v1/connections/{id}/migrations/{migrationID}/execute", connectionUser(authz.ExecuteMigration, h.executeMigration))
+	h.mux.Handle("POST /api/v1/connections/{id}/migrations/explain", connectionUser(authz.ExecuteMigration, h.explainMigration))
+	h.mux.Handle("POST /api/v1/connections/{id}/migrations/schema-diff", connectionUser(authz.ReadMigration, h.schemaDiff))
 }
 
 type connectionOption struct {
@@ -162,36 +177,31 @@ func (h *Handler) getConnection(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, out)
 }
 func (h *Handler) updateConnection(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
 	var body struct {
 		Pool   *manageddb.PoolConfig `json:"pool"`
-		Name   string                `json:"name"`
-		Driver string                `json:"driver"`
+		Name   *string               `json:"name"`
+		Driver *string               `json:"driver"`
 		DSN    string                `json:"dsn"`
 	}
 	if !decode(w, r, &body) {
 		return
 	}
-	var out manageddb.Connection
-	var err error
-	if body.DSN != "" {
-		out, err = h.connections.Replace(r.Context(), r.PathValue("id"), manageddb.Config{Name: body.Name, Driver: body.Driver, DSN: body.DSN, Pool: valuePool(body.Pool)})
-	} else if body.Pool != nil {
-		out, err = h.connections.UpdatePool(r.Context(), r.PathValue("id"), *body.Pool)
-	} else {
-		writeError(w, 400, "invalid_request", "provide pool settings or a complete replacement connection")
-		return
+	out, err := h.connections.Update(r.Context(), r.PathValue("id"), manageddb.ConnectionUpdate{
+		Name: body.Name, Driver: body.Driver, DSN: body.DSN, Pool: body.Pool,
+	})
+	switch {
+	case errors.Is(err, manageddb.ErrInvalidUpdate):
+		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+	case errors.Is(err, manageddb.ErrNotFound):
+		writeError(w, http.StatusNotFound, "not_found", "connection not found")
+	case errors.Is(err, manageddb.ErrConnectionFailed):
+		writeError(w, http.StatusBadGateway, "connection_failed", "could not verify the new database connection; previous settings are unchanged")
+	case err != nil:
+		writeError(w, http.StatusServiceUnavailable, "connection_unavailable", "could not save connection settings")
+	default:
+		writeJSON(w, http.StatusOK, out)
 	}
-	if err != nil {
-		writeServiceError(w, err)
-		return
-	}
-	writeJSON(w, 200, out)
-}
-func valuePool(p *manageddb.PoolConfig) manageddb.PoolConfig {
-	if p == nil {
-		return manageddb.PoolConfig{}
-	}
-	return *p
 }
 func (h *Handler) deleteConnection(w http.ResponseWriter, r *http.Request) {
 	if err := h.connections.Remove(r.Context(), r.PathValue("id")); err != nil {

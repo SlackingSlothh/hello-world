@@ -16,6 +16,7 @@ type Security interface {
 	RequireAdmin(http.Handler) http.Handler
 	RequireConnectionAccess(authz.Action, http.Handler) http.Handler
 	VisibleConnections(context.Context, []manageddb.Connection) ([]manageddb.Connection, error)
+	UserID(context.Context) (string, bool)
 }
 
 type authSecurity struct {
@@ -56,6 +57,10 @@ func (s authSecurity) VisibleConnections(ctx context.Context, items []manageddb.
 	}
 	return visible, nil
 }
+func (authSecurity) UserID(ctx context.Context) (string, bool) {
+	identity, ok := httpapi.IdentityFromContext(ctx)
+	return identity.UserID, ok
+}
 
 type unavailableSecurity struct{}
 
@@ -73,4 +78,7 @@ func (s unavailableSecurity) RequireConnectionAccess(_ authz.Action, next http.H
 }
 func (unavailableSecurity) VisibleConnections(_ context.Context, _ []manageddb.Connection) ([]manageddb.Connection, error) {
 	return nil, authz.ErrForbidden
+}
+func (unavailableSecurity) UserID(context.Context) (string, bool) {
+	return "", false
 }
