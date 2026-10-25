@@ -112,6 +112,11 @@ Alpine.data('newConnectionForm', () => ({
 Alpine.data('groupAccessManager', () => ({
 	groups: [],
 	groupName: '',
+	memberGroupID: '',
+	memberUserID: '',
+	groupUsers: [],
+	membersLoading: false,
+	memberRequest: 0,
 	connections: [],
 	groupID: '',
 	databaseID: '',
@@ -121,6 +126,51 @@ Alpine.data('groupAccessManager', () => ({
 	error: '',
 	notice: '',
 	init() { this.load(); },
+	get members() { return this.groupUsers.filter(user => user.member); },
+	get availableUsers() { return this.groupUsers.filter(user => !user.member && user.active); },
+	async loadMembers() {
+		const request = ++this.memberRequest;
+		const groupID = this.memberGroupID;
+		this.groupUsers = [];
+		this.memberUserID = '';
+		this.error = '';
+		this.membersLoading = true;
+		try {
+			if (!groupID) return;
+			const response = await fetch(apiURL(`/api/v1/access/groups/${encodeURIComponent(groupID)}/members`), { credentials: 'include', cache: 'no-store' });
+			if (!response.ok) throw new Error('Could not load group members. Check your session and permissions.');
+			const users = await response.json();
+			if (request !== this.memberRequest) return;
+			this.groupUsers = users;
+			this.memberUserID = this.availableUsers[0]?.id || '';
+		} catch (error) {
+			if (request === this.memberRequest) this.error = error.message || 'Could not load group members.';
+		} finally {
+			if (request === this.memberRequest) this.membersLoading = false;
+		}
+	},
+	async setMember(userID, member) {
+		if (this.busy || this.membersLoading || !this.memberGroupID || !userID) return;
+		const group = this.groups.find(group => group.id === this.memberGroupID);
+		if (!member && !window.confirm('Remove this member? Their active sessions will end and they must sign in again.')) return;
+		if (member && group?.isAdmin && !window.confirm('This group grants Platform Admin permissions. Add this user as an administrator?')) return;
+		this.busy = true;
+		this.error = '';
+		this.notice = '';
+		try {
+			const response = await fetch(apiURL(`/api/v1/access/groups/${encodeURIComponent(this.memberGroupID)}/members/${encodeURIComponent(userID)}`), {
+				method: member ? 'PUT' : 'DELETE', credentials: 'include',
+			});
+			if (!response.ok) {
+				const result = await response.json().catch(() => ({}));
+				throw new Error(result.error?.message || 'Could not update group membership. Check your session and permissions.');
+			}
+			this.notice = member ? 'Member added.' : 'Member removed. Their active sessions have ended.';
+			await this.loadMembers();
+		} catch (error) { this.error = error.message || 'Could not update group membership.'; }
+		finally { this.busy = false; }
+	},
+
 	async createGroup() {
 		if (this.busy || this.loading) return;
 		this.busy = true;
@@ -139,6 +189,8 @@ Alpine.data('groupAccessManager', () => ({
 			this.groups.push(result);
 			this.groups.sort((a, b) => a.name.localeCompare(b.name));
 			this.groupID = result.id;
+			this.memberGroupID = result.id;
+			await this.loadMembers();
 			this.groupName = '';
 			this.notice = `Group “${result.name}” added without members or database access.`;
 		} catch (error) { this.error = error.message || 'Could not add group.'; }
@@ -155,6 +207,8 @@ Alpine.data('groupAccessManager', () => ({
 			this.connections = result.connections || [];
 			this.groupID ||= this.groups[0]?.id || '';
 			this.databaseID ||= this.connections[0]?.id || '';
+			this.memberGroupID ||= this.groups[0]?.id || '';
+			await this.loadMembers();
 		} catch (error) {
 			this.error = error.message || 'Could not load group access settings.';
 		} finally { this.loading = false; }

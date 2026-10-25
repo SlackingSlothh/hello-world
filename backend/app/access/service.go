@@ -34,9 +34,10 @@ type Store interface {
 }
 
 type Service struct {
-	Store  Store
-	Users  UserStore
-	Groups GroupStore
+	Store       Store
+	Users       UserStore
+	Groups      GroupStore
+	Memberships MembershipStore
 }
 
 func (s Service) List(ctx context.Context) ([]Group, error) {

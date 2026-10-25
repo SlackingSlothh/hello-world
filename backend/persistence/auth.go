@@ -43,9 +43,8 @@ func (s *AuthStore) SeedAccount(ctx context.Context, seed SeedAccount) error {
 		return fmt.Errorf("begin account seed: %w", err)
 	}
 	defer tx.Rollback()
-	_, err = tx.ExecContext(ctx, `INSERT INTO platform_users(id,username,password_hash,is_platform_admin,active)
-		VALUES($1,$2,$3,$4,TRUE) ON CONFLICT(id) DO UPDATE SET is_platform_admin=EXCLUDED.is_platform_admin
-		WHERE platform_users.username=EXCLUDED.username`, seed.ID, seed.Username, seed.PasswordHash, seed.PlatformAdmin)
+	created, err := tx.ExecContext(ctx, `INSERT INTO platform_users(id,username,password_hash,is_platform_admin,active)
+		VALUES($1,$2,$3,$4,TRUE) ON CONFLICT(id) DO NOTHING`, seed.ID, seed.Username, seed.PasswordHash, seed.PlatformAdmin)
 	if err != nil {
 		return fmt.Errorf("seed account %s: %w", seed.ID, err)
 	}
@@ -69,8 +68,14 @@ func (s *AuthStore) SeedAccount(ctx context.Context, seed SeedAccount) error {
 	if groupName != seed.GroupName {
 		return fmt.Errorf("seed group ID %s is already assigned to another group", seed.GroupID)
 	}
-	if _, err := tx.ExecContext(ctx, `INSERT INTO user_group_memberships(user_id,group_id) VALUES($1,$2) ON CONFLICT DO NOTHING`, seed.ID, seed.GroupID); err != nil {
-		return fmt.Errorf("assign seeded account %s to group: %w", seed.ID, err)
+	count, err := created.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if count > 0 {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO user_group_memberships(user_id,group_id) VALUES($1,$2) ON CONFLICT DO NOTHING`, seed.ID, seed.GroupID); err != nil {
+			return fmt.Errorf("assign seeded account %s to group: %w", seed.ID, err)
+		}
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit account seed %s: %w", seed.ID, err)
