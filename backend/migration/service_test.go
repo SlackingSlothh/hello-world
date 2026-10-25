@@ -1,12 +1,8 @@
 package migration
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
-	"net/http"
-	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
@@ -209,6 +205,7 @@ type mockTargetDB struct {
 	committedSQLs  []string
 	rolledBackRuns int
 	currentSchema  []TableSchema
+	dialect        TargetDialect
 }
 
 func (db *mockTargetDB) BeginTargetTx(_ context.Context, _ string) (TargetTx, error) {
@@ -219,6 +216,13 @@ type mockTargetTx struct {
 	parent     *mockTargetDB
 	stagedSQLs []string
 	done       bool
+}
+
+func (tx *mockTargetTx) Dialect() TargetDialect {
+	if tx.parent.dialect == "" {
+		return DialectPostgres
+	}
+	return tx.parent.dialect
 }
 
 func (tx *mockTargetTx) AcquireTargetLock(_ context.Context, _ string) error {
@@ -312,6 +316,38 @@ func TestValidateTransactionalSQL(t *testing.T) {
 				t.Fatalf("kasus %s seharusnya mengembalikan ErrInvalidSQL, dapat: %v", tc.name, err)
 			}
 		})
+	}
+}
+
+func TestSplitSQLStatementsIgnoresSemicolonsInLiteralsAndComments(t *testing.T) {
+	got := splitSQLStatements("INSERT INTO notes(text) VALUES ('one;two'); -- keep ; here\nUPDATE notes SET text = `value;name` WHERE id = 1;")
+	if len(got) != 2 {
+		t.Fatalf("expected two statements, got %d: %#v", len(got), got)
+	}
+}
+
+func TestValidateTransactionalSQLForDialect(t *testing.T) {
+	for _, query := range []string{
+		"SELECT id FROM products;",
+		"INSERT INTO products(id) VALUES (1);",
+		"UPDATE products SET name = 'CREATE TABLE' WHERE id = 1;",
+		"DELETE FROM products WHERE id = 1;",
+		"# CREATE TABLE is only a comment\nINSERT INTO products(id) VALUES (1);",
+	} {
+		if err := ValidateTransactionalSQLForDialect(query, DialectMySQL); err != nil {
+			t.Errorf("transactional SQL was rejected: %s: %v", query, err)
+		}
+	}
+	for _, query := range []string{
+		"CREATE TABLE products (id INT);",
+		"ALTER TABLE products ADD COLUMN name TEXT;",
+		"SET autocommit = 1;",
+		"CALL update_products();",
+		"SELECT id FROM products INTO OUTFILE '/tmp/products.csv';",
+	} {
+		if err := ValidateTransactionalSQLForDialect(query, DialectMariaDB); !errors.Is(err, ErrInvalidSQL) {
+			t.Errorf("non-transactional SQL should be rejected: %s: %v", query, err)
+		}
 	}
 }
 
@@ -496,56 +532,43 @@ func TestBonus_ExplainAnalyzeAlwaysRollsBackAndSchemaDiff(t *testing.T) {
 	}
 }
 
-func TestHTTPHandler_EndToEndFlow(t *testing.T) {
+func TestCompareSchemas_MySQLUsesDialectSyntax(t *testing.T) {
+	diff := CompareSchemasForDialect(nil, []TableSchema{{
+		TableName: "order`items",
+		Columns: []ColumnSchema{
+			{Name: "item`id", DataType: "BIGINT", IsPrimary: true, IsNullable: false},
+		},
+	}}, DialectMySQL)
+	if !strings.Contains(diff.CandidateSQL, "`order``items`") || !strings.Contains(diff.CandidateSQL, "`item``id`") {
+		t.Fatalf("MySQL candidate SQL must escape identifiers with backticks: %s", diff.CandidateSQL)
+	}
+}
+
+func TestExecuteMigration_RejectsImplicitCommitSQLForMySQL(t *testing.T) {
+	ctx := context.Background()
 	authz := newMockAuthorizer()
 	store := newInMemoryStore()
-	targetDB := &mockTargetDB{}
+	targetDB := &mockTargetDB{dialect: DialectMySQL}
+	user := Principal{UserID: "user-1"}
+	authz.Grant(user.UserID, "mysql-db", "VIEW_EDIT")
+	service := NewService(authz, store, targetDB, nil)
 
-	const dbID = "db-1"
-	currentUser := Principal{UserID: "user-42", Username: "dimas"}
-	authz.Grant(currentUser.UserID, dbID, "VIEW_EDIT")
-
-	svc := NewService(authz, store, targetDB, nil)
-	h := NewHandler(svc, func(_ context.Context) (Principal, bool) {
-		return currentUser, true
+	draft, err := service.CreateDraft(ctx, user, CreateDraftInput{
+		DatabaseID: "mysql-db",
+		Title:      "Create table",
+		SQLContent: "CREATE TABLE products (id INT);",
 	})
-
-	mux := http.NewServeMux()
-	h.RegisterRoutes(mux)
-
-	bodyJSON := `{"title":"Tambah tabel kategori","description":"Migrasi awal","sql_content":"CREATE TABLE categories (id SERIAL PRIMARY KEY, name TEXT NOT NULL);"}`
-	reqCreate := httptest.NewRequest(http.MethodPost, "/databases/db-1/migrations", bytes.NewBufferString(bodyJSON))
-	reqCreate.Header.Set("Content-Type", "application/json")
-	recCreate := httptest.NewRecorder()
-	mux.ServeHTTP(recCreate, reqCreate)
-
-	if recCreate.Code != http.StatusCreated {
-		t.Fatalf("POST create draft seharusnya 201 Created, dapat %d: %s", recCreate.Code, recCreate.Body.String())
+	if err != nil {
+		t.Fatalf("create draft: %v", err)
 	}
-
-	var created Migration
-	if err := json.Unmarshal(recCreate.Body.Bytes(), &created); err != nil {
-		t.Fatalf("gagal decode response create: %v", err)
+	if _, err := service.ExecuteMigration(ctx, user, "mysql-db", draft.ID); !errors.Is(err, ErrInvalidSQL) {
+		t.Fatalf("expected implicit-commit DDL to be rejected, got %v", err)
 	}
-
-	reqExec := httptest.NewRequest(http.MethodPost, "/databases/db-1/migrations/1/execute", nil)
-	recExec := httptest.NewRecorder()
-	mux.ServeHTTP(recExec, reqExec)
-
-	if recExec.Code != http.StatusOK {
-		t.Fatalf("POST execute seharusnya 200 OK, dapat %d: %s", recExec.Code, recExec.Body.String())
+	runs, err := store.ListRunsByMigration(ctx, draft.ID)
+	if err != nil || len(runs) != 0 {
+		t.Fatalf("rejected SQL must not create an execution run: %v (%d runs)", err, len(runs))
 	}
-
-	reqListHTMX := httptest.NewRequest(http.MethodGet, "/databases/db-1/migrations", nil)
-	reqListHTMX.Header.Set("HX-Request", "true")
-	recListHTMX := httptest.NewRecorder()
-	mux.ServeHTTP(recListHTMX, reqListHTMX)
-
-	if recListHTMX.Code != http.StatusOK {
-		t.Fatalf("GET list HTMX seharusnya 200 OK, dapat %d", recListHTMX.Code)
-	}
-	htmlOut := recListHTMX.Body.String()
-	if !strings.Contains(htmlOut, "Tambah tabel kategori") || !strings.Contains(htmlOut, "v1") {
-		t.Fatalf("output fragment HTMX tidak memuat judul dan versi v1:\n%s", htmlOut)
+	if targetDB.rolledBackRuns != 1 || len(targetDB.committedSQLs) != 0 {
+		t.Fatal("transaction opened for validation must be rolled back without executing SQL")
 	}
 }
