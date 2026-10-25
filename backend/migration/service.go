@@ -9,6 +9,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"hello-world/authz"
 )
 
 var (
@@ -27,7 +29,7 @@ var (
 	// kueri sql kosong atau mengandung perintah transaksi manual
 	ErrInvalidSQL = errors.New("migration: kueri SQL tidak valid atau melanggar aturan transaksi")
 	// eksekusi sql gagal di database target dan sudah di-rollback
-	ErrExecutionFailed = errors.New("migration: eksekusi SQL gagal pada database target dan perubahan telah di-rollback")
+	ErrExecutionFailed = errors.New("migration: eksekusi SQL gagal pada database target")
 )
 
 // status rancangan migrasi pada tabel migrations
@@ -49,13 +51,13 @@ const (
 )
 
 // jenis aksi untuk pemeriksaan otorisasi
-type Action string
+type Action = authz.Action
 
 const (
-	ActionReadMigration    Action = "migration.read"    // boleh untuk view only dan view edit
-	ActionCreateMigration  Action = "migration.create"  // khusus view edit
-	ActionUpdateMigration  Action = "migration.update"  // khusus view edit
-	ActionExecuteMigration Action = "migration.execute" // khusus view edit
+	ActionReadMigration    = authz.ReadMigration
+	ActionCreateMigration  = authz.CreateMigration
+	ActionUpdateMigration  = authz.UpdateMigration
+	ActionExecuteMigration = authz.ExecuteMigration
 )
 
 // identitas pengguna dari sesi yang sudah terverifikasi
@@ -113,6 +115,27 @@ func (fn AuthorizerFunc) RequireDatabase(ctx context.Context, principal Principa
 	return fn(ctx, principal, databaseID, action)
 }
 
+type AccessAuthorizer struct {
+	Reader authz.AccessReader
+}
+
+func (a AccessAuthorizer) RequireDatabase(ctx context.Context, principal Principal, databaseID string, action Action) error {
+	if a.Reader == nil {
+		return ErrForbidden
+	}
+	access, err := a.Reader.LoadAccess(ctx, principal.UserID)
+	if err != nil {
+		return fmt.Errorf("load migration access: %w", err)
+	}
+	if access.UserID != principal.UserID {
+		return ErrForbidden
+	}
+	if err := authz.Authorize(access, action, databaseID); err != nil {
+		return ErrForbidden
+	}
+	return nil
+}
+
 // kontrak penyimpanan data migrasi di database platform
 type Store interface {
 	CreateMigration(ctx context.Context, m *Migration) error
@@ -133,6 +156,7 @@ type TargetConnector interface {
 
 // kontrak operasi transaksi di database target
 type TargetTx interface {
+	Dialect() TargetDialect
 	AcquireTargetLock(ctx context.Context, databaseID string) error
 	ExecSQL(ctx context.Context, sqlQuery string) error
 	ExplainSQL(ctx context.Context, sqlQuery string, analyze bool) (string, error)
@@ -219,13 +243,44 @@ func ValidateTransactionalSQL(rawSQL string) error {
 	return nil
 }
 
+func ValidateTransactionalSQLForDialect(rawSQL string, dialect TargetDialect) error {
+	if err := ValidateTransactionalSQL(rawSQL); err != nil {
+		return err
+	}
+	if dialect != DialectMySQL && dialect != DialectMariaDB {
+		return nil
+	}
+	for _, statement := range splitSQLStatementsForDialect(stripSQLCommentsAndStringsForDialect(rawSQL, dialect), dialect) {
+		tokens := strings.Fields(strings.ToUpper(statement))
+		if len(tokens) == 0 {
+			continue
+		}
+		switch tokens[0] {
+		case "SELECT", "INSERT", "UPDATE", "DELETE", "REPLACE", "WITH":
+		default:
+			return fmt.Errorf("%w: perintah %s tidak diizinkan untuk migrasi transaksional pada %s", ErrInvalidSQL, tokens[0], dialect)
+		}
+		for _, token := range tokens {
+			if token == "OUTFILE" || token == "DUMPFILE" {
+				return fmt.Errorf("%w: SELECT dengan %s tidak dapat di-rollback", ErrInvalidSQL, token)
+			}
+		}
+	}
+	return nil
+}
+
 // menghapus komentar dan isi literal string supaya kata kunci di dalamnya tidak ikut terdeteksi
 func stripSQLCommentsAndStrings(sqlText string) string {
+	return stripSQLCommentsAndStringsForDialect(sqlText, DialectPostgres)
+}
+
+func stripSQLCommentsAndStringsForDialect(sqlText string, dialect TargetDialect) string {
 	var out strings.Builder
 	out.Grow(len(sqlText))
 
 	inSingleQuote := false
 	inDoubleQuote := false
+	inBacktick := false
 	inLineComment := false
 	inBlockComment := false
 
@@ -267,13 +322,28 @@ func stripSQLCommentsAndStrings(sqlText string) string {
 					i++
 					continue
 				}
+				if inBacktick {
+					if ch == '`' {
+						if next == '`' {
+							i++
+							continue
+						}
+						inBacktick = false
+						out.WriteByte('`')
+					}
+					continue
+				}
 				inDoubleQuote = false
 				out.WriteByte('"')
 			}
 			continue
 		}
 
-		if ch == '-' && next == '-' {
+		if ch == '#' && (dialect == DialectMySQL || dialect == DialectMariaDB) {
+			inLineComment = true
+			continue
+		}
+		if ch == '-' && next == '-' && (dialect == DialectPostgres || i+2 == len(sqlText) || sqlText[i+2] <= ' ') {
 			inLineComment = true
 			i++
 			continue
@@ -293,10 +363,99 @@ func stripSQLCommentsAndStrings(sqlText string) string {
 			out.WriteByte('"')
 			continue
 		}
+		if ch == '`' && (dialect == DialectMySQL || dialect == DialectMariaDB) {
+			inBacktick = true
+			out.WriteByte('`')
+			continue
+		}
 
 		out.WriteByte(ch)
 	}
 	return out.String()
+}
+
+func splitSQLStatements(sqlText string) []string {
+	return splitSQLStatementsForDialect(sqlText, DialectPostgres)
+}
+
+func splitSQLStatementsForDialect(sqlText string, dialect TargetDialect) []string {
+	var statements []string
+	var statement strings.Builder
+	var quote byte
+	inLineComment := false
+	inBlockComment := false
+
+	flush := func() {
+		if trimmed := strings.TrimSpace(statement.String()); trimmed != "" {
+			statements = append(statements, trimmed)
+		}
+		statement.Reset()
+	}
+
+	for i := 0; i < len(sqlText); i++ {
+		ch := sqlText[i]
+		var next byte
+		if i+1 < len(sqlText) {
+			next = sqlText[i+1]
+		}
+		if inLineComment {
+			statement.WriteByte(ch)
+			if ch == '\n' {
+				inLineComment = false
+			}
+			continue
+		}
+		if inBlockComment {
+			statement.WriteByte(ch)
+			if ch == '*' && next == '/' {
+				statement.WriteByte(next)
+				i++
+				inBlockComment = false
+			}
+			continue
+		}
+		if quote != 0 {
+			statement.WriteByte(ch)
+			if ch == '\\' && quote != '`' && i+1 < len(sqlText) {
+				i++
+				statement.WriteByte(sqlText[i])
+				continue
+			}
+			if ch == quote {
+				if next == quote {
+					statement.WriteByte(next)
+					i++
+				} else {
+					quote = 0
+				}
+			}
+			continue
+		}
+		switch {
+		case ch == '-' && next == '-' && (dialect == DialectPostgres || i+2 == len(sqlText) || sqlText[i+2] <= ' '):
+			statement.WriteByte(ch)
+			statement.WriteByte(next)
+			i++
+			inLineComment = true
+		case ch == '#' && (dialect == DialectMySQL || dialect == DialectMariaDB):
+			statement.WriteByte(ch)
+			inLineComment = true
+		case ch == '/' && next == '*':
+			statement.WriteByte(ch)
+			statement.WriteByte(next)
+			i++
+			inBlockComment = true
+		case ch == '\'' || ch == '"' || ch == '`':
+			quote = ch
+			statement.WriteByte(ch)
+		case ch == ';':
+			flush()
+		default:
+			statement.WriteByte(ch)
+		}
+	}
+	flush()
+	return statements
 }
 
 // layanan utama pengelola logika bisnis migrasi
@@ -496,6 +655,20 @@ func (s *Service) ExecuteMigration(ctx context.Context, principal Principal, dat
 	}
 	defer s.unlockDatabase(databaseID)
 
+	tx, err := s.connector.BeginTargetTx(ctx, databaseID)
+	if err != nil {
+		return nil, fmt.Errorf("gagal membuka transaksi ke database target: %w", err)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback(ctx)
+		}
+	}()
+	if err := ValidateTransactionalSQLForDialect(m.SQLContent, tx.Dialect()); err != nil {
+		return nil, errors.Join(err, tx.Rollback(ctx))
+	}
+
 	prevRuns, err := s.store.ListRunsByMigration(ctx, m.ID)
 	if err != nil {
 		return nil, err
@@ -517,32 +690,23 @@ func (s *Service) ExecuteMigration(ctx context.Context, principal Principal, dat
 		return nil, err
 	}
 
-	// buka transaksi ke database target dan pastikan rollback jika belum commit
-	tx, err := s.connector.BeginTargetTx(ctx, databaseID)
-	if err != nil {
-		return s.failRun(ctx, principal, m, run, startTime, fmt.Sprintf("gagal membuka transaksi ke database target: %v", err))
-	}
-	committed := false
-	defer func() {
-		if !committed {
-			_ = tx.Rollback(ctx)
-		}
-	}()
-
 	if err := tx.AcquireTargetLock(ctx, databaseID); err != nil {
-		return s.failRun(ctx, principal, m, run, startTime, fmt.Sprintf("gagal mengunci urutan migrasi pada database target: %v", err))
+		rollbackErr := tx.Rollback(ctx)
+		committed = true
+		return s.failRun(ctx, principal, m, run, startTime, errors.Join(fmt.Errorf("gagal mengunci urutan migrasi pada database target: %w", err), rollbackErr))
 	}
 
 	// jalankan kueri sql pada database target, langsung rollback jika gagal
 	if err := tx.ExecSQL(ctx, m.SQLContent); err != nil {
-		_ = tx.Rollback(ctx)
+		rollbackErr := tx.Rollback(ctx)
 		committed = true
-		return s.failRun(ctx, principal, m, run, startTime, err.Error())
+		return s.failRun(ctx, principal, m, run, startTime, errors.Join(err, rollbackErr))
 	}
 
 	// simpan perubahan secara permanen di database target
 	if err := tx.Commit(ctx); err != nil {
-		return s.failRun(ctx, principal, m, run, startTime, fmt.Sprintf("gagal melakukan commit transaksi pada database target: %v", err))
+		committed = true
+		return s.failRun(ctx, principal, m, run, startTime, fmt.Errorf("gagal melakukan commit transaksi pada database target: %w", err))
 	}
 	committed = true
 
@@ -585,14 +749,18 @@ func (s *Service) ExecuteMigration(ctx context.Context, principal Principal, dat
 }
 
 // mencatat kegagalan eksekusi migrasi beserta pesan errornya ke database platform
-func (s *Service) failRun(ctx context.Context, principal Principal, m *Migration, run *MigrationRun, startTime time.Time, errMsg string) (*ExecuteResult, error) {
+func (s *Service) failRun(ctx context.Context, principal Principal, m *Migration, run *MigrationRun, startTime time.Time, cause error) (*ExecuteResult, error) {
+	errMsg := cause.Error()
 	finishTime := s.nowFn()
 	execMs := finishTime.Sub(startTime).Milliseconds()
 	if execMs < 0 {
 		execMs = 0
 	}
 
-	_ = s.store.CompleteRunFailed(ctx, run.ID, m.ID, errMsg, execMs, finishTime)
+	if err := s.store.CompleteRunFailed(ctx, run.ID, m.ID, errMsg, execMs, finishTime); err != nil {
+		cause = errors.Join(cause, fmt.Errorf("gagal menyimpan status kegagalan: %w", err))
+		errMsg = cause.Error()
+	}
 
 	m.Status = StatusFailed
 	m.UpdatedAt = finishTime
@@ -609,14 +777,14 @@ func (s *Service) failRun(ctx context.Context, principal Principal, m *Migration
 		ObjectID:    m.ID,
 		DatabaseID:  m.DatabaseID,
 		Status:      "FAILED",
-		Message:     fmt.Sprintf("Migrasi #%d gagal dan di-rollback: %s", m.ID, errMsg),
+		Message:     fmt.Sprintf("Migrasi #%d gagal dieksekusi: %s", m.ID, errMsg),
 		CreatedAt:   finishTime,
 	})
 
 	return &ExecuteResult{
 		Migration: *m,
 		Run:       *run,
-	}, fmt.Errorf("%w: %s", ErrExecutionFailed, errMsg)
+	}, errors.Join(ErrExecutionFailed, cause)
 }
 
 // ringkasan rencana eksekusi kueri dari hasil explain postgresql
@@ -649,14 +817,16 @@ func (s *Service) ExplainQuery(ctx context.Context, principal Principal, databas
 	if err != nil {
 		return nil, fmt.Errorf("gagal membuka koneksi ke database target untuk EXPLAIN: %w", err)
 	}
-	// selalu batalkan transaksi setelah explain selesai
-	defer func() {
-		_ = tx.Rollback(ctx)
-	}()
-
+	if err := validateExplainSQL(sqlQuery, tx.Dialect(), analyze); err != nil {
+		return nil, errors.Join(err, tx.Rollback(ctx))
+	}
 	rawJSON, err := tx.ExplainSQL(ctx, sqlQuery, analyze)
+	rollbackErr := tx.Rollback(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("gagal menjalankan EXPLAIN pada database target: %w", err)
+		return nil, errors.Join(fmt.Errorf("gagal menjalankan EXPLAIN pada database target: %w", err), rollbackErr)
+	}
+	if rollbackErr != nil {
+		return nil, fmt.Errorf("gagal melakukan rollback setelah EXPLAIN: %w", rollbackErr)
 	}
 
 	summary, err := parsePostgresExplainJSON(rawJSON)
@@ -667,6 +837,23 @@ func (s *Service) ExplainQuery(ctx context.Context, principal Principal, databas
 		}, nil
 	}
 	return summary, nil
+}
+
+func validateExplainSQL(sqlQuery string, dialect TargetDialect, analyze bool) error {
+	if err := ValidateTransactionalSQLForDialect(sqlQuery, dialect); err != nil {
+		return err
+	}
+	statements := splitSQLStatementsForDialect(sqlQuery, dialect)
+	if len(statements) != 1 {
+		return fmt.Errorf("%w: EXPLAIN hanya menerima satu statement", ErrInvalidSQL)
+	}
+	if analyze && (dialect == DialectMySQL || dialect == DialectMariaDB) {
+		tokens := strings.Fields(strings.ToUpper(stripSQLCommentsAndStringsForDialect(statements[0], dialect)))
+		if len(tokens) == 0 || tokens[0] != "SELECT" {
+			return fmt.Errorf("%w: EXPLAIN ANALYZE pada %s hanya diizinkan untuk SELECT", ErrInvalidSQL, dialect)
+		}
+	}
+	return nil
 }
 
 type pgExplainRoot struct {
@@ -749,30 +936,33 @@ func (s *Service) GenerateSchemaDiff(ctx context.Context, principal Principal, d
 	if err := s.authorize(ctx, principal, databaseID, ActionReadMigration); err != nil {
 		return nil, err
 	}
-	if strings.TrimSpace(schemaName) == "" {
-		schemaName = "public"
-	}
+	schemaName = strings.TrimSpace(schemaName)
 
 	tx, err := s.connector.BeginTargetTx(ctx, databaseID)
 	if err != nil {
 		return nil, fmt.Errorf("gagal membuka koneksi ke database target untuk Schema Diff: %w", err)
 	}
-	defer func() {
-		_ = tx.Rollback(ctx)
-	}()
-
 	currentTables, err := tx.InspectSchema(ctx, schemaName)
+	rollbackErr := tx.Rollback(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("gagal membaca struktur schema dari database target: %w", err)
+		return nil, errors.Join(fmt.Errorf("gagal membaca struktur schema dari database target: %w", err), rollbackErr)
+	}
+	if rollbackErr != nil {
+		return nil, fmt.Errorf("gagal melakukan rollback setelah membaca schema: %w", rollbackErr)
 	}
 
-	return CompareSchemas(currentTables, desiredTables), nil
+	return CompareSchemasForDialect(currentTables, desiredTables, tx.Dialect()), nil
 }
 
 // mencari perbedaan tabel dan kolom untuk menghasilkan kandidat kueri sql migrasi
 func CompareSchemas(current, desired []TableSchema) *SchemaDiffResult {
+	return CompareSchemasForDialect(current, desired, DialectPostgres)
+}
+
+func CompareSchemasForDialect(current, desired []TableSchema, dialect TargetDialect) *SchemaDiffResult {
 	res := &SchemaDiffResult{}
 	var sqlLines []string
+	quote := func(identifier string) string { return QuoteIdentForDialect(identifier, dialect) }
 
 	currentMap := make(map[string]TableSchema, len(current))
 	for _, t := range current {
@@ -790,7 +980,7 @@ func CompareSchemas(current, desired []TableSchema) *SchemaDiffResult {
 		currTable, exists := currentMap[tKey]
 		if !exists {
 			res.AddedTables = append(res.AddedTables, wantTable.TableName)
-			sqlLines = append(sqlLines, buildCreateTableSQL(wantTable))
+			sqlLines = append(sqlLines, buildCreateTableSQLForDialect(wantTable, dialect))
 			continue
 		}
 
@@ -808,23 +998,41 @@ func CompareSchemas(current, desired []TableSchema) *SchemaDiffResult {
 			currCol, colExists := currCols[cKey]
 			if !colExists {
 				res.AddedColumns = append(res.AddedColumns, fmt.Sprintf("%s.%s", wantTable.TableName, wantCol.Name))
-				sqlLines = append(sqlLines, buildAddColumnSQL(wantTable.TableName, wantCol))
+				sqlLines = append(sqlLines, buildAddColumnSQLForDialect(wantTable.TableName, wantCol, dialect))
 				continue
 			}
 
-			if !strings.EqualFold(strings.TrimSpace(currCol.DataType), strings.TrimSpace(wantCol.DataType)) {
+			typeChanged := !strings.EqualFold(strings.TrimSpace(currCol.DataType), strings.TrimSpace(wantCol.DataType))
+			nullabilityChanged := currCol.IsNullable != wantCol.IsNullable
+			if typeChanged {
 				res.ModifiedColumns = append(res.ModifiedColumns, fmt.Sprintf("%s.%s (type: %s -> %s)", wantTable.TableName, wantCol.Name, currCol.DataType, wantCol.DataType))
-				sqlLines = append(sqlLines, fmt.Sprintf("ALTER TABLE %s ALTER COLUMN %s TYPE %s;",
-					QuoteIdent(wantTable.TableName), QuoteIdent(wantCol.Name), wantCol.DataType))
 			}
-			if currCol.IsNullable != wantCol.IsNullable {
+			if nullabilityChanged {
 				nullAction := "SET NOT NULL"
 				if wantCol.IsNullable {
 					nullAction = "DROP NOT NULL"
 				}
 				res.ModifiedColumns = append(res.ModifiedColumns, fmt.Sprintf("%s.%s (%s)", wantTable.TableName, wantCol.Name, nullAction))
-				sqlLines = append(sqlLines, fmt.Sprintf("ALTER TABLE %s ALTER COLUMN %s %s;",
-					QuoteIdent(wantTable.TableName), QuoteIdent(wantCol.Name), nullAction))
+			}
+
+			if dialect == DialectMySQL || dialect == DialectMariaDB {
+				if typeChanged || nullabilityChanged {
+					sqlLines = append(sqlLines, fmt.Sprintf("ALTER TABLE %s MODIFY COLUMN %s;",
+						quote(wantTable.TableName), mysqlColumnDefinition(wantCol)))
+				}
+			} else {
+				if typeChanged {
+					sqlLines = append(sqlLines, fmt.Sprintf("ALTER TABLE %s ALTER COLUMN %s TYPE %s;",
+						quote(wantTable.TableName), quote(wantCol.Name), wantCol.DataType))
+				}
+				if nullabilityChanged {
+					nullAction := "SET NOT NULL"
+					if wantCol.IsNullable {
+						nullAction = "DROP NOT NULL"
+					}
+					sqlLines = append(sqlLines, fmt.Sprintf("ALTER TABLE %s ALTER COLUMN %s %s;",
+						quote(wantTable.TableName), quote(wantCol.Name), nullAction))
+				}
 			}
 		}
 
@@ -833,7 +1041,7 @@ func CompareSchemas(current, desired []TableSchema) *SchemaDiffResult {
 			if _, stillWanted := wantCols[cKey]; !stillWanted {
 				res.DroppedColumns = append(res.DroppedColumns, fmt.Sprintf("%s.%s", wantTable.TableName, currCol.Name))
 				sqlLines = append(sqlLines, fmt.Sprintf("ALTER TABLE %s DROP COLUMN %s;",
-					QuoteIdent(wantTable.TableName), QuoteIdent(currCol.Name)))
+					quote(wantTable.TableName), quote(currCol.Name)))
 			}
 		}
 	}
@@ -843,7 +1051,7 @@ func CompareSchemas(current, desired []TableSchema) *SchemaDiffResult {
 		tKey := strings.ToLower(currTable.TableName)
 		if _, stillWanted := desiredMap[tKey]; !stillWanted {
 			res.DroppedTables = append(res.DroppedTables, currTable.TableName)
-			sqlLines = append(sqlLines, fmt.Sprintf("DROP TABLE %s;", QuoteIdent(currTable.TableName)))
+			sqlLines = append(sqlLines, fmt.Sprintf("DROP TABLE %s;", quote(currTable.TableName)))
 		}
 	}
 
@@ -857,12 +1065,17 @@ func CompareSchemas(current, desired []TableSchema) *SchemaDiffResult {
 
 // menyusun perintah sql create table dari definisi tabel
 func buildCreateTableSQL(t TableSchema) string {
+	return buildCreateTableSQLForDialect(t, DialectPostgres)
+}
+
+func buildCreateTableSQLForDialect(t TableSchema, dialect TargetDialect) string {
 	var colDefs []string
 	for _, c := range t.Columns {
-		def := fmt.Sprintf("    %s %s", QuoteIdent(c.Name), c.DataType)
+		def := fmt.Sprintf("    %s %s", QuoteIdentForDialect(c.Name, dialect), c.DataType)
 		if c.IsPrimary {
 			def += " PRIMARY KEY"
-		} else if !c.IsNullable {
+		}
+		if !c.IsNullable {
 			def += " NOT NULL"
 		}
 		if c.DefaultVal != nil && strings.TrimSpace(*c.DefaultVal) != "" {
@@ -870,12 +1083,16 @@ func buildCreateTableSQL(t TableSchema) string {
 		}
 		colDefs = append(colDefs, def)
 	}
-	return fmt.Sprintf("CREATE TABLE %s (\n%s\n);", QuoteIdent(t.TableName), strings.Join(colDefs, ",\n"))
+	return fmt.Sprintf("CREATE TABLE %s (\n%s\n);", QuoteIdentForDialect(t.TableName, dialect), strings.Join(colDefs, ",\n"))
 }
 
 // menyusun perintah sql alter table add column
 func buildAddColumnSQL(tableName string, c ColumnSchema) string {
-	def := fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s %s", QuoteIdent(tableName), QuoteIdent(c.Name), c.DataType)
+	return buildAddColumnSQLForDialect(tableName, c, DialectPostgres)
+}
+
+func buildAddColumnSQLForDialect(tableName string, c ColumnSchema, dialect TargetDialect) string {
+	def := fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s %s", QuoteIdentForDialect(tableName, dialect), QuoteIdentForDialect(c.Name, dialect), c.DataType)
 	if !c.IsNullable {
 		def += " NOT NULL"
 	}
@@ -888,6 +1105,27 @@ func buildAddColumnSQL(tableName string, c ColumnSchema) string {
 // mengutip nama tabel atau kolom dengan tanda petik ganda agar aman digunakan di sql
 func QuoteIdent(ident string) string {
 	return `"` + strings.ReplaceAll(ident, `"`, `""`) + `"`
+}
+
+func QuoteIdentForDialect(ident string, dialect TargetDialect) string {
+	if dialect == DialectMySQL || dialect == DialectMariaDB {
+		return "`" + strings.ReplaceAll(ident, "`", "``") + "`"
+	}
+	return QuoteIdent(ident)
+}
+
+func mysqlColumnDefinition(column ColumnSchema) string {
+	def := QuoteIdentForDialect(column.Name, DialectMySQL) + " " + column.DataType
+	if column.IsPrimary {
+		def += " PRIMARY KEY"
+	}
+	if !column.IsNullable {
+		def += " NOT NULL"
+	}
+	if column.DefaultVal != nil && strings.TrimSpace(*column.DefaultVal) != "" {
+		def += " DEFAULT " + *column.DefaultVal
+	}
+	return def
 }
 
 // memeriksa validitas principal dan izin akses terhadap database target
