@@ -1,0 +1,12 @@
+<section x-data="newUserForm" class="mx-auto max-w-xl">
+	<p class="mb-2 text-sm font-medium text-indigo-600">Administration / Users</p>
+	<h1 class="text-3xl font-semibold tracking-tight">Add user</h1>
+	<p class="mt-2 text-sm text-slate-500">Create an account that can sign in. Database access is assigned through groups.</p>
+	<form @submit.prevent="submit" class="mt-8 space-y-5 rounded-2xl border border-slate-200 bg-white p-6">
+		<label class="block text-sm font-medium">Username<input class="field mt-2" x-model="username" name="username" autocomplete="off" required maxlength="100" /><span class="mt-1 block text-xs text-slate-500">No spaces. Usernames are case-sensitive.</span></label>
+		<label class="block text-sm font-medium">Password<input class="field mt-2" x-model="password" name="password" type="password" autocomplete="new-password" required maxlength="1024" /></label>
+		<p x-show="error" x-cloak x-text="error" role="alert" class="text-sm text-rose-700"></p>
+		<p x-show="notice" x-cloak x-text="notice" role="status" class="text-sm text-emerald-700"></p>
+		<button type="submit" class="button-primary" :disabled="submitting" x-text="submitting ? 'Adding user…' : 'Add user'"></button>
+	</form>
+</section>

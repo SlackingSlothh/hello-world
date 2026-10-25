@@ -193,6 +193,30 @@ Alpine.data('groupAccessManager', () => ({
 	},
 }));
 
+Alpine.data('newUserForm', () => ({
+	username: '', password: '', submitting: false, error: '', notice: '',
+	async submit() {
+		if (this.submitting) return;
+		this.submitting = true;
+		this.error = '';
+		this.notice = '';
+		try {
+			const response = await fetch(apiURL('/api/v1/access/users'), {
+				method: 'POST', credentials: 'include',
+				headers: { 'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8' },
+				body: new URLSearchParams({ username: this.username, password: this.password }),
+			});
+			if (response.status === 401) throw new Error('Your session has expired. Sign in again.');
+			if (response.status === 403) throw new Error('Only platform admins can add users.');
+			const result = await response.json().catch(() => ({}));
+			if (!response.ok) throw new Error(result.error?.message || 'Could not add user.');
+			this.notice = `User “${result.username}” added. Database access requires group membership.`;
+			this.username = '';
+		} catch (error) { this.error = error.message || 'Could not add user.'; }
+		finally { this.password = ''; this.submitting = false; }
+	},
+}));
+
 Alpine.data('loginForm', () => ({
 	username: '',
 	password: '',

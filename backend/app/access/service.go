@@ -33,7 +33,10 @@ type Store interface {
 	DeleteGroupAccess(context.Context, string, string) error
 }
 
-type Service struct{ Store Store }
+type Service struct {
+	Store Store
+	Users UserStore
+}
 
 func (s Service) List(ctx context.Context) ([]Group, error) {
 	if s.Store == nil {
