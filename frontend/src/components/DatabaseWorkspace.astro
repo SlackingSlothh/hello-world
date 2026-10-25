@@ -1,0 +1,1614 @@
+<section
+	x-data="databaseWorkspace()"
+	x-init="initWorkspace()"
+	x-show="activeConnection !== null"
+	x-cloak
+	class="mx-auto max-w-6xl"
+>
+	<!-- Top Navigation & Active Database Header -->
+	<div class="mb-6 flex flex-col justify-between gap-4 border-b border-slate-200 pb-6 sm:flex-row sm:items-center">
+		<div>
+			<div class="flex items-center gap-2 text-sm font-medium text-indigo-600">
+				<button type="button" @click="closeWorkspace()" class="inline-flex items-center gap-1 hover:underline">
+					<span>←</span>
+					<span>All databases</span>
+				</button>
+				<span class="text-slate-300">/</span>
+				<span x-text="activeConnection?.name || 'Database'"></span>
+			</div>
+			<div class="mt-2 flex flex-wrap items-center gap-3">
+				<h1 class="text-3xl font-semibold tracking-tight text-slate-950" x-text="activeConnection?.name"></h1>
+				<span class="rounded-full bg-indigo-50 px-3 py-1 text-xs font-semibold uppercase tracking-wide text-indigo-700" x-text="activeConnection?.driver"></span>
+				<span
+					class="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium"
+					:class="activeConnection?.reachable ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-800'"
+				>
+					<span class="size-1.5 rounded-full" :class="activeConnection?.reachable ? 'bg-emerald-500' : 'bg-amber-500'"></span>
+					<span x-text="activeConnection?.reachable ? 'Connected' : 'Disconnected / Unreachable'"></span>
+				</span>
+			</div>
+			<p class="mt-1 text-xs text-slate-500">
+				Connection ID: <code class="font-mono text-slate-700" x-text="activeConnection?.id"></code>
+			</p>
+		</div>
+
+		<div class="flex flex-wrap items-center gap-2">
+			<button type="button" class="button-secondary" :disabled="testingPing" @click="pingConnection()">
+				<span x-text="testingPing ? 'Testing…' : 'Test ping'"></span>
+			</button>
+			<button type="button" class="button-secondary" @click="refreshActiveTab()">
+				<span>↻ Refresh</span>
+			</button>
+			<button type="button" class="button-secondary" @click="closeWorkspace()">
+				<span>Switch database</span>
+			</button>
+		</div>
+	</div>
+
+	<!-- Global Alerts -->
+	<div x-show="error" x-cloak class="mb-5 flex items-start justify-between gap-4 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800" role="alert">
+		<div>
+			<p class="font-semibold">Operation failed</p>
+			<p class="mt-0.5 whitespace-pre-wrap font-mono text-xs" x-text="error"></p>
+		</div>
+		<button type="button" class="font-semibold" @click="error = ''" aria-label="Dismiss error">×</button>
+	</div>
+
+	<div x-show="notice" x-cloak class="mb-5 flex items-start justify-between gap-4 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800" role="status">
+		<span x-text="notice"></span>
+		<button type="button" class="font-semibold" @click="notice = ''" aria-label="Dismiss notice">×</button>
+	</div>
+
+	<!-- Workspace Main Navigation Tabs -->
+	<div class="mb-6 flex flex-wrap gap-2 border-b border-slate-200 pb-3" role="tablist">
+		<button
+			type="button"
+			role="tab"
+			@click="switchTab('viewer')"
+			class="rounded-xl px-4 py-2 text-sm font-medium transition"
+			:class="activeTab === 'viewer' ? 'bg-indigo-600 text-white shadow-sm' : 'bg-white text-slate-600 hover:bg-slate-100 border border-slate-200'"
+		>
+			◫ Schema & Table Viewer
+		</button>
+		<button
+			type="button"
+			role="tab"
+			@click="switchTab('query')"
+			class="rounded-xl px-4 py-2 text-sm font-medium transition"
+			:class="activeTab === 'query' ? 'bg-indigo-600 text-white shadow-sm' : 'bg-white text-slate-600 hover:bg-slate-100 border border-slate-200'"
+		>
+			▸ Read-Only Query Editor
+		</button>
+		<button
+			type="button"
+			role="tab"
+			@click="switchTab('migrations')"
+			class="inline-flex items-center gap-2 rounded-xl px-4 py-2 text-sm font-medium transition"
+			:class="activeTab === 'migrations' ? 'bg-indigo-600 text-white shadow-sm' : 'bg-white text-slate-600 hover:bg-slate-100 border border-slate-200'"
+		>
+			<span>⇄ SQL Migrations</span>
+			<span
+				class="rounded-full px-2 py-0.5 text-xs"
+				:class="activeTab === 'migrations' ? 'bg-indigo-500 text-white' : 'bg-slate-100 text-slate-700'"
+				x-text="migrations.length"
+			></span>
+		</button>
+		<button
+			type="button"
+			role="tab"
+			@click="switchTab('explain')"
+			class="rounded-xl px-4 py-2 text-sm font-medium transition"
+			:class="activeTab === 'explain' ? 'bg-indigo-600 text-white shadow-sm' : 'bg-white text-slate-600 hover:bg-slate-100 border border-slate-200'"
+		>
+			⚡ Explain Plan
+		</button>
+		<button
+			type="button"
+			role="tab"
+			@click="switchTab('schemadiff')"
+			class="rounded-xl px-4 py-2 text-sm font-medium transition"
+			:class="activeTab === 'schemadiff' ? 'bg-indigo-600 text-white shadow-sm' : 'bg-white text-slate-600 hover:bg-slate-100 border border-slate-200'"
+		>
+			Δ Schema Diff
+		</button>
+	</div>
+
+	<!-- ========================================================= -->
+	<!-- TAB 1: SCHEMA & TABLE VIEWER                              -->
+	<!-- ========================================================= -->
+	<div x-show="activeTab === 'viewer'" x-cloak class="grid gap-6 lg:grid-cols-[280px_1fr]">
+		<!-- Left Sidebar: Schema & Tables -->
+		<aside class="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+			<label class="block text-xs font-semibold uppercase tracking-wide text-slate-500">
+				Schema
+				<select class="field mt-1.5" x-model="selectedSchema" @change="loadTables()">
+					<template x-if="schemas.length === 0">
+						<option value="">No schemas found</option>
+					</template>
+					<template x-for="schema in schemas" :key="schema">
+						<option :value="schema" x-text="schema"></option>
+					</template>
+				</select>
+			</label>
+
+			<div class="mt-4">
+				<div class="flex items-center justify-between">
+					<span class="text-xs font-semibold uppercase tracking-wide text-slate-500">Tables</span>
+					<span class="text-xs text-slate-400" x-text="filteredTables.length"></span>
+				</div>
+				<input
+					type="search"
+					class="field mt-1.5 text-xs"
+					placeholder="Filter tables…"
+					x-model="tableFilter"
+				/>
+			</div>
+
+			<div x-show="loadingTables" class="mt-4 space-y-2">
+				<div class="h-9 animate-pulse rounded-xl bg-slate-100"></div>
+				<div class="h-9 animate-pulse rounded-xl bg-slate-100"></div>
+				<div class="h-9 animate-pulse rounded-xl bg-slate-100"></div>
+			</div>
+
+			<div x-show="!loadingTables && filteredTables.length === 0" class="mt-4 rounded-xl border border-dashed border-slate-200 p-4 text-center text-xs text-slate-500">
+				No tables available in this schema.
+			</div>
+
+			<ul x-show="!loadingTables && filteredTables.length > 0" class="mt-3 max-h-[460px] space-y-1 overflow-y-auto pr-1">
+				<template x-for="tbl in filteredTables" :key="tbl.name">
+					<li>
+						<button
+							type="button"
+							@click="selectTable(tbl.name)"
+							class="flex w-full items-center justify-between rounded-xl px-3 py-2 text-left text-sm transition"
+							:class="selectedTable === tbl.name ? 'bg-indigo-50 font-semibold text-indigo-700' : 'text-slate-700 hover:bg-slate-50'"
+						>
+							<span class="truncate" x-text="tbl.name"></span>
+							<span x-show="tbl.type" class="ml-2 shrink-0 text-[10px] uppercase text-slate-400" x-text="tbl.type"></span>
+						</button>
+					</li>
+				</template>
+			</ul>
+		</aside>
+
+		<!-- Right Main Panel: Table Data, Columns, Constraints, Indexes -->
+		<div class="min-w-0 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+			<template x-if="!selectedTable">
+				<div class="py-16 text-center">
+					<div class="mx-auto grid size-12 place-items-center rounded-2xl bg-indigo-50 text-xl text-indigo-700">◫</div>
+					<h3 class="mt-4 font-semibold text-slate-900">Select a table to inspect</h3>
+					<p class="mx-auto mt-1 max-w-md text-sm text-slate-500">Choose a schema and table on the left to browse paginated rows, column definitions, constraints, and indexes.</p>
+				</div>
+			</template>
+
+			<template x-if="selectedTable">
+				<div>
+					<div class="flex flex-col justify-between gap-4 border-b border-slate-100 pb-4 sm:flex-row sm:items-center">
+						<div>
+							<p class="text-xs font-medium text-slate-400" x-text="`${selectedSchema}.${selectedTable}`"></p>
+							<h2 class="text-xl font-semibold text-slate-950" x-text="selectedTable"></h2>
+						</div>
+						<div class="flex flex-wrap gap-1.5">
+							<button
+								type="button"
+								@click="switchViewerSubTab('rows')"
+								class="rounded-lg px-3 py-1.5 text-xs font-semibold transition"
+								:class="viewerSubTab === 'rows' ? 'bg-slate-900 text-white' : 'bg-slate-100 text-slate-700 hover:bg-slate-200'"
+							>
+								Rows
+							</button>
+							<button
+								type="button"
+								@click="switchViewerSubTab('columns')"
+								class="rounded-lg px-3 py-1.5 text-xs font-semibold transition"
+								:class="viewerSubTab === 'columns' ? 'bg-slate-900 text-white' : 'bg-slate-100 text-slate-700 hover:bg-slate-200'"
+							>
+								Columns (<span x-text="tableColumns.length"></span>)
+							</button>
+							<button
+								type="button"
+								@click="switchViewerSubTab('constraints')"
+								class="rounded-lg px-3 py-1.5 text-xs font-semibold transition"
+								:class="viewerSubTab === 'constraints' ? 'bg-slate-900 text-white' : 'bg-slate-100 text-slate-700 hover:bg-slate-200'"
+							>
+								Constraints (<span x-text="tableConstraints.length"></span>)
+							</button>
+							<button
+								type="button"
+								@click="switchViewerSubTab('indexes')"
+								class="rounded-lg px-3 py-1.5 text-xs font-semibold transition"
+								:class="viewerSubTab === 'indexes' ? 'bg-slate-900 text-white' : 'bg-slate-100 text-slate-700 hover:bg-slate-200'"
+							>
+								Indexes (<span x-text="tableIndexes.length"></span>)
+							</button>
+							<button
+								type="button"
+								@click="openQueryForSelectedTable()"
+								class="rounded-lg bg-indigo-50 px-3 py-1.5 text-xs font-semibold text-indigo-700 hover:bg-indigo-100"
+							>
+								Query table →
+							</button>
+						</div>
+					</div>
+
+					<!-- Sub-tab: Rows -->
+					<div x-show="viewerSubTab === 'rows'" class="mt-4">
+						<div class="mb-3 flex flex-wrap items-center justify-between gap-3 text-xs text-slate-600">
+							<div class="flex flex-wrap items-center gap-2">
+								<label class="inline-flex items-center gap-1.5">
+									<span>Limit</span>
+									<select class="field py-1 text-xs" x-model.number="rowsLimit" @change="rowsOffset = 0; loadTableRows()">
+										<option value="25">25</option>
+										<option value="50">50</option>
+										<option value="100">100</option>
+									</select>
+								</label>
+								<label class="inline-flex items-center gap-1.5">
+									<span>Sort by</span>
+									<select class="field py-1 text-xs" x-model="rowsSortColumn" @change="loadTableRows()">
+										<option value="">Default</option>
+										<template x-for="col in rowColumns" :key="col">
+											<option :value="col" x-text="col"></option>
+										</template>
+									</select>
+								</label>
+								<select x-show="rowsSortColumn" class="field py-1 text-xs" x-model="rowsSortDir" @change="loadTableRows()">
+									<option value="asc">ASC</option>
+									<option value="desc">DESC</option>
+								</select>
+							</div>
+
+							<div class="flex items-center gap-2">
+								<span x-text="`Offset ${rowsOffset} · Showing ${tableRows.length} rows`"></span>
+								<button type="button" class="button-secondary px-2.5 py-1 text-xs" :disabled="rowsOffset === 0 || loadingTableData" @click="prevRowsPage()">← Prev</button>
+								<button type="button" class="button-secondary px-2.5 py-1 text-xs" :disabled="tableRows.length < rowsLimit || loadingTableData" @click="nextRowsPage()">Next →</button>
+							</div>
+						</div>
+
+						<div x-show="loadingTableData" class="h-48 animate-pulse rounded-xl bg-slate-100"></div>
+
+						<div x-show="!loadingTableData && tableRows.length === 0" class="rounded-xl border border-dashed border-slate-200 py-12 text-center text-sm text-slate-500">
+							No rows returned for this table.
+						</div>
+
+						<div x-show="!loadingTableData && tableRows.length > 0" class="overflow-x-auto rounded-xl border border-slate-200">
+							<table class="min-w-full divide-y divide-slate-200 text-left text-xs">
+								<thead class="bg-slate-50 font-semibold text-slate-700">
+									<tr>
+										<template x-for="col in rowColumns" :key="col">
+											<th class="whitespace-nowrap px-3 py-2.5" x-text="col"></th>
+										</template>
+									</tr>
+								</thead>
+								<tbody class="divide-y divide-slate-100 bg-white font-mono">
+									<template x-for="(row, rIdx) in tableRows" :key="rIdx">
+										<tr class="hover:bg-slate-50">
+											<template x-for="col in rowColumns" :key="col">
+												<td class="max-w-xs truncate whitespace-nowrap px-3 py-2 text-slate-700" :title="formatCellValue(row[col])" x-text="formatCellValue(row[col])"></td>
+											</template>
+										</tr>
+									</template>
+								</tbody>
+							</table>
+						</div>
+					</div>
+
+					<!-- Sub-tab: Columns -->
+					<div x-show="viewerSubTab === 'columns'" class="mt-4">
+						<div class="overflow-x-auto rounded-xl border border-slate-200">
+							<table class="min-w-full divide-y divide-slate-200 text-left text-xs">
+								<thead class="bg-slate-50 font-semibold text-slate-700">
+									<tr>
+										<th class="px-4 py-2.5">Column</th>
+										<th class="px-4 py-2.5">Data Type</th>
+										<th class="px-4 py-2.5">Nullable</th>
+										<th class="px-4 py-2.5">Default</th>
+										<th class="px-4 py-2.5">Key</th>
+									</tr>
+								</thead>
+								<tbody class="divide-y divide-slate-100 bg-white">
+									<template x-if="tableColumns.length === 0">
+										<tr><td colspan="5" class="px-4 py-6 text-center text-slate-500">No column metadata available.</td></tr>
+									</template>
+									<template x-for="col in tableColumns" :key="col.name">
+										<tr>
+											<td class="px-4 py-2.5 font-mono font-semibold text-slate-900" x-text="col.name"></td>
+											<td class="px-4 py-2.5 font-mono text-indigo-700" x-text="col.dataType || col.data_type || col.type || '—'"></td>
+											<td class="px-4 py-2.5" x-text="(col.nullable ?? col.is_nullable) ? 'YES' : 'NO'"></td>
+											<td class="px-4 py-2.5 font-mono text-slate-500" x-text="col.default ?? col.column_default ?? col.defaultValue ?? '—'"></td>
+											<td class="px-4 py-2.5">
+												<span x-show="col.primaryKey || col.is_primary_key" class="rounded bg-indigo-50 px-2 py-0.5 text-[10px] font-semibold text-indigo-700">PK</span>
+											</td>
+										</tr>
+									</template>
+								</tbody>
+							</table>
+						</div>
+					</div>
+
+					<!-- Sub-tab: Constraints -->
+					<div x-show="viewerSubTab === 'constraints'" class="mt-4">
+						<div class="overflow-x-auto rounded-xl border border-slate-200">
+							<table class="min-w-full divide-y divide-slate-200 text-left text-xs">
+								<thead class="bg-slate-50 font-semibold text-slate-700">
+									<tr>
+										<th class="px-4 py-2.5">Name</th>
+										<th class="px-4 py-2.5">Type</th>
+										<th class="px-4 py-2.5">Columns / Definition</th>
+									</tr>
+								</thead>
+								<tbody class="divide-y divide-slate-100 bg-white">
+									<template x-if="tableConstraints.length === 0">
+										<tr><td colspan="3" class="px-4 py-6 text-center text-slate-500">No constraints found.</td></tr>
+									</template>
+									<template x-for="c in tableConstraints" :key="c.name">
+										<tr>
+											<td class="px-4 py-2.5 font-mono font-semibold text-slate-900" x-text="c.name"></td>
+											<td class="px-4 py-2.5"><span class="rounded bg-slate-100 px-2 py-0.5 font-medium text-slate-700" x-text="c.type || c.constraint_type || 'CONSTRAINT'"></span></td>
+											<td class="px-4 py-2.5 font-mono text-slate-600" x-text="c.definition || (Array.isArray(c.columns) ? c.columns.join(', ') : c.column_name) || '—'"></td>
+										</tr>
+									</template>
+								</tbody>
+							</table>
+						</div>
+					</div>
+
+					<!-- Sub-tab: Indexes -->
+					<div x-show="viewerSubTab === 'indexes'" class="mt-4">
+						<div class="overflow-x-auto rounded-xl border border-slate-200">
+							<table class="min-w-full divide-y divide-slate-200 text-left text-xs">
+								<thead class="bg-slate-50 font-semibold text-slate-700">
+									<tr>
+										<th class="px-4 py-2.5">Index Name</th>
+										<th class="px-4 py-2.5">Unique</th>
+										<th class="px-4 py-2.5">Columns / Definition</th>
+									</tr>
+								</thead>
+								<tbody class="divide-y divide-slate-100 bg-white">
+									<template x-if="tableIndexes.length === 0">
+										<tr><td colspan="3" class="px-4 py-6 text-center text-slate-500">No indexes found.</td></tr>
+									</template>
+									<template x-for="idx in tableIndexes" :key="idx.name">
+										<tr>
+											<td class="px-4 py-2.5 font-mono font-semibold text-slate-900" x-text="idx.name"></td>
+											<td class="px-4 py-2.5" x-text="(idx.unique ?? idx.is_unique) ? 'Unique' : 'Non-unique'"></td>
+											<td class="px-4 py-2.5 font-mono text-slate-600" x-text="idx.definition || (Array.isArray(idx.columns) ? idx.columns.join(', ') : '') || '—'"></td>
+										</tr>
+									</template>
+								</tbody>
+							</table>
+						</div>
+					</div>
+				</div>
+			</template>
+		</div>
+	</div>
+
+	<!-- ========================================================= -->
+	<!-- TAB 2: READ-ONLY SQL QUERY EDITOR                         -->
+	<!-- ========================================================= -->
+	<div x-show="activeTab === 'query'" x-cloak class="space-y-6">
+		<div class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+			<div class="flex flex-col justify-between gap-3 sm:flex-row sm:items-center">
+				<div>
+					<h2 class="text-lg font-semibold text-slate-950">Interactive Read-Only SQL Query</h2>
+					<p class="text-xs text-slate-500">Run <code class="font-mono text-indigo-600">SELECT</code> queries directly against <span class="font-medium text-slate-700" x-text="activeConnection?.name"></span>. For DDL/DML changes, use the <strong>SQL Migrations</strong> tab.</p>
+				</div>
+				<div class="flex flex-wrap items-center gap-2">
+					<button
+						type="button"
+						class="button-secondary text-xs"
+						@click="sendQueryToExplain()"
+						:disabled="!querySQL.trim()"
+					>
+						⚡ Analyze in Explain Plan
+					</button>
+					<button
+						type="button"
+						class="button-primary"
+						:disabled="runningQuery || !querySQL.trim()"
+						@click="runReadOnlyQuery()"
+					>
+						<span x-text="runningQuery ? 'Running query…' : '▸ Run Query'"></span>
+					</button>
+				</div>
+			</div>
+
+			<div class="mt-4">
+				<textarea
+					class="field min-h-[140px] w-full font-mono text-xs leading-relaxed"
+					placeholder="SELECT * FROM public.users LIMIT 50;"
+					x-model="querySQL"
+				></textarea>
+			</div>
+		</div>
+
+		<!-- Query Results -->
+		<div class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+			<div class="flex items-center justify-between border-b border-slate-100 pb-3">
+				<h3 class="text-sm font-semibold text-slate-900">Query Result</h3>
+				<span class="text-xs text-slate-500" x-text="queryResultRows.length ? `${queryResultRows.length} row(s) returned` : 'No results yet'"></span>
+			</div>
+
+			<div x-show="runningQuery" class="mt-4 h-36 animate-pulse rounded-xl bg-slate-100"></div>
+
+			<div x-show="!runningQuery && queryResultRows.length === 0" class="py-12 text-center text-sm text-slate-500">
+				Run a SQL query above to inspect the result set.
+			</div>
+
+			<div x-show="!runningQuery && queryResultRows.length > 0" class="mt-4 overflow-x-auto rounded-xl border border-slate-200">
+				<table class="min-w-full divide-y divide-slate-200 text-left text-xs">
+					<thead class="bg-slate-50 font-semibold text-slate-700">
+						<tr>
+							<template x-for="col in queryResultColumns" :key="col">
+								<th class="whitespace-nowrap px-3 py-2.5" x-text="col"></th>
+							</template>
+						</tr>
+					</thead>
+					<tbody class="divide-y divide-slate-100 bg-white font-mono">
+						<template x-for="(row, idx) in queryResultRows" :key="idx">
+							<tr class="hover:bg-slate-50">
+								<template x-for="col in queryResultColumns" :key="col">
+									<td class="max-w-xs truncate whitespace-nowrap px-3 py-2 text-slate-700" x-text="formatCellValue(row[col])"></td>
+								</template>
+							</tr>
+						</template>
+					</tbody>
+				</table>
+			</div>
+		</div>
+	</div>
+
+	<!-- ========================================================= -->
+	<!-- TAB 3: SQL MIGRATIONS (TRANSACTIONAL DDL/DML & HISTORY)   -->
+	<!-- ========================================================= -->
+	<div x-show="activeTab === 'migrations'" x-cloak>
+		<!-- Non-Postgres Guardrail Banner -->
+		<div
+			x-show="activeConnection && activeConnection.driver !== 'postgres'"
+			class="mb-6 rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900"
+		>
+			<p class="font-semibold">PostgreSQL required for Transactional Migrations</p>
+			<p class="mt-1 text-xs leading-relaxed">
+				This connection uses <code class="font-mono font-bold uppercase" x-text="activeConnection?.driver"></code>. The Migration Engine uses PostgreSQL transactional DDL (<code class="font-mono">BEGIN … COMMIT / ROLLBACK</code>) and <code class="font-mono">pg_advisory_xact_lock</code>, so it is only active for <code class="font-mono">postgres</code> connections.
+			</p>
+		</div>
+
+		<div class="grid gap-6 lg:grid-cols-[320px_1fr]">
+			<!-- Left Column: Linear Migration Version History -->
+			<aside class="flex flex-col rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+				<div class="flex items-center justify-between gap-2">
+					<div>
+						<h2 class="text-sm font-semibold text-slate-950">Migration History</h2>
+						<p class="text-xs text-slate-500">Linear version tracking</p>
+					</div>
+					<button type="button" class="button-primary px-3 py-1.5 text-xs" @click="startNewMigrationDraft()">
+						+ New Draft
+					</button>
+				</div>
+
+				<div class="mt-3 flex gap-1 rounded-xl bg-slate-100 p-1 text-xs">
+					<button type="button" @click="migrationStatusFilter = 'ALL'" class="flex-1 rounded-lg py-1 font-medium" :class="migrationStatusFilter === 'ALL' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-600'">All</button>
+					<button type="button" @click="migrationStatusFilter = 'DRAFT'" class="flex-1 rounded-lg py-1 font-medium" :class="migrationStatusFilter === 'DRAFT' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-600'">Draft</button>
+					<button type="button" @click="migrationStatusFilter = 'FAILED'" class="flex-1 rounded-lg py-1 font-medium" :class="migrationStatusFilter === 'FAILED' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-600'">Failed</button>
+					<button type="button" @click="migrationStatusFilter = 'APPLIED'" class="flex-1 rounded-lg py-1 font-medium" :class="migrationStatusFilter === 'APPLIED' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-600'">Applied</button>
+				</div>
+
+				<div x-show="loadingMigrations" class="mt-4 space-y-2">
+					<div class="h-16 animate-pulse rounded-xl bg-slate-100"></div>
+					<div class="h-16 animate-pulse rounded-xl bg-slate-100"></div>
+				</div>
+
+				<div x-show="!loadingMigrations && filteredMigrations.length === 0" class="mt-4 rounded-xl border border-dashed border-slate-200 p-6 text-center text-xs text-slate-500">
+					No migrations match this filter. Click <strong>+ New Draft</strong> to author a migration.
+				</div>
+
+				<ul x-show="!loadingMigrations && filteredMigrations.length > 0" class="mt-3 max-h-[540px] space-y-2 overflow-y-auto pr-1">
+					<template x-for="mig in filteredMigrations" :key="mig.id">
+						<li>
+							<button
+								type="button"
+								@click="selectMigration(mig.id)"
+								class="w-full rounded-xl border p-3 text-left transition"
+								:class="selectedMigration?.id === mig.id ? 'border-indigo-600 bg-indigo-50/50 shadow-sm' : 'border-slate-200 bg-white hover:border-slate-300'"
+							>
+								<div class="flex items-start justify-between gap-2">
+									<div class="min-w-0">
+										<div class="flex items-center gap-1.5">
+											<span
+												x-show="mig.version"
+												class="rounded bg-indigo-100 px-1.5 py-0.5 font-mono text-[10px] font-bold text-indigo-800"
+												x-text="`v${mig.version}`"
+											></span>
+											<p class="truncate text-sm font-semibold text-slate-900" x-text="mig.title"></p>
+										</div>
+										<p class="mt-1 truncate text-xs text-slate-500" x-text="mig.description || 'No description'"></p>
+									</div>
+									<span
+										class="shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase"
+										:class="{
+											'bg-emerald-50 text-emerald-700': mig.status === 'APPLIED',
+											'bg-amber-50 text-amber-800': mig.status === 'DRAFT',
+											'bg-rose-50 text-rose-700': mig.status === 'FAILED'
+										}"
+										x-text="mig.status"
+									></span>
+								</div>
+								<div class="mt-2 flex items-center justify-between text-[11px] text-slate-400">
+									<span class="font-mono" x-text="`#${mig.id}`"></span>
+									<span x-text="formatDateTime(mig.applied_at || mig.updated_at || mig.created_at)"></span>
+								</div>
+							</button>
+						</li>
+					</template>
+				</ul>
+			</aside>
+
+			<!-- Right Column: Migration Editor, Transactional Executor & Audit Runs -->
+			<div class="space-y-6">
+				<div class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
+					<div class="flex flex-wrap items-start justify-between gap-3 border-b border-slate-100 pb-4">
+						<div>
+							<div class="flex items-center gap-2">
+								<h3 class="text-lg font-semibold text-slate-950" x-text="selectedMigration ? `Migration #${selectedMigration.id}` : 'Create New Migration Draft'"></h3>
+								<template x-if="selectedMigration">
+									<span
+										class="rounded-full px-2.5 py-0.5 text-xs font-semibold"
+										:class="{
+											'bg-emerald-50 text-emerald-700': selectedMigration.status === 'APPLIED',
+											'bg-amber-50 text-amber-800': selectedMigration.status === 'DRAFT',
+											'bg-rose-50 text-rose-700': selectedMigration.status === 'FAILED'
+										}"
+										x-text="selectedMigration.version ? `${selectedMigration.status} · v${selectedMigration.version}` : selectedMigration.status"
+									></span>
+								</template>
+							</div>
+							<p class="mt-1 text-xs text-slate-500">
+								All statements execute atomically inside a single PostgreSQL transaction (<code class="font-mono">BEGIN → COMMIT</code>, or automatic <code class="font-mono">ROLLBACK</code> on any error).
+							</p>
+						</div>
+
+						<template x-if="selectedMigration && selectedMigration.checksum">
+							<div class="rounded-lg bg-slate-50 px-3 py-1.5 text-right">
+								<p class="text-[10px] uppercase tracking-wide text-slate-400">SHA-256 Checksum</p>
+								<p class="font-mono text-xs text-slate-600" x-text="`${selectedMigration.checksum.slice(0, 16)}…`"></p>
+							</div>
+						</template>
+					</div>
+
+					<div class="mt-4 grid gap-4 sm:grid-cols-2">
+						<label class="block text-sm font-medium text-slate-700">
+							Migration title
+							<input
+								type="text"
+								class="field mt-1.5"
+								placeholder="e.g., create_orders_table"
+								x-model="migrationForm.title"
+								:disabled="selectedMigration?.status === 'APPLIED'"
+							/>
+						</label>
+						<label class="block text-sm font-medium text-slate-700">
+							Description (optional)
+							<input
+								type="text"
+								class="field mt-1.5"
+								placeholder="Add orders table and foreign key index"
+								x-model="migrationForm.description"
+								:disabled="selectedMigration?.status === 'APPLIED'"
+							/>
+						</label>
+					</div>
+
+					<div class="mt-4">
+						<div class="flex items-center justify-between">
+							<label class="text-sm font-medium text-slate-700">SQL Migration Script (DDL / DML)</label>
+							<button
+								type="button"
+								class="text-xs font-semibold text-indigo-600 hover:underline"
+								@click="sendMigrationSQLToExplain()"
+								:disabled="!migrationForm.sql_content.trim()"
+							>
+								⚡ Test in Explain Plan →
+							</button>
+						</div>
+						<textarea
+							class="field mt-1.5 min-h-[220px] w-full font-mono text-xs leading-relaxed"
+							placeholder="CREATE TABLE IF NOT EXISTS customer_orders (&#10;    id BIGSERIAL PRIMARY KEY,&#10;    customer_name TEXT NOT NULL,&#10;    total_cents BIGINT NOT NULL DEFAULT 0,&#10;    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()&#10;);"
+							x-model="migrationForm.sql_content"
+							:disabled="selectedMigration?.status === 'APPLIED'"
+						></textarea>
+					</div>
+
+					<!-- Client-Side Transaction Guardrail Hint -->
+					<div
+						x-show="sqlGuardrailWarning"
+						x-cloak
+						class="mt-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-2.5 text-xs text-amber-900"
+						x-text="sqlGuardrailWarning"
+					></div>
+
+					<!-- Action Bar -->
+					<div class="mt-5 flex flex-wrap items-center justify-between gap-3 border-t border-slate-100 pt-4">
+						<div class="flex flex-wrap gap-2">
+							<template x-if="!selectedMigration">
+								<button
+									type="button"
+									class="button-primary"
+									:disabled="savingMigration || !migrationForm.title.trim() || !migrationForm.sql_content.trim()"
+									@click="createMigrationDraft()"
+								>
+									<span x-text="savingMigration ? 'Saving draft…' : 'Save Migration Draft'"></span>
+								</button>
+							</template>
+
+							<template x-if="selectedMigration && selectedMigration.status !== 'APPLIED'">
+								<button
+									type="button"
+									class="button-secondary"
+									:disabled="savingMigration || !migrationForm.title.trim() || !migrationForm.sql_content.trim()"
+									@click="updateMigrationDraft()"
+								>
+									<span x-text="savingMigration ? 'Updating…' : 'Update Draft SQL'"></span>
+								</button>
+							</template>
+						</div>
+
+						<template x-if="selectedMigration && selectedMigration.status !== 'APPLIED'">
+							<button
+								type="button"
+								class="button-primary bg-emerald-600 hover:bg-emerald-700"
+								:disabled="executingMigration || activeConnection?.driver !== 'postgres'"
+								@click="executeSelectedMigration()"
+							>
+								<span x-text="executingMigration ? 'Executing transaction…' : '▸ Execute Migration (BEGIN → COMMIT)'"></span>
+							</button>
+						</template>
+
+						<template x-if="selectedMigration && selectedMigration.status === 'APPLIED'">
+							<span class="text-xs font-medium text-emerald-700">
+								✓ Applied as version v<span x-text="selectedMigration.version"></span> — immutable record
+							</span>
+						</template>
+					</div>
+				</div>
+
+				<!-- Execution History (migration_runs) -->
+				<div x-show="selectedMigration" class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
+					<div class="flex items-center justify-between border-b border-slate-100 pb-3">
+						<div>
+							<h3 class="text-base font-semibold text-slate-950">Execution Audit Log (<code class="font-mono text-xs">migration_runs</code>)</h3>
+							<p class="text-xs text-slate-500">Every execution attempt is recorded, including failed runs that triggered an automatic <code class="font-mono">ROLLBACK</code>.</p>
+						</div>
+						<span class="rounded-full bg-slate-100 px-2.5 py-0.5 text-xs font-semibold text-slate-700" x-text="`${migrationRuns.length} attempt(s)`"></span>
+					</div>
+
+					<div x-show="migrationRuns.length === 0" class="py-8 text-center text-xs text-slate-500">
+						This migration has not been executed yet.
+					</div>
+
+					<div x-show="migrationRuns.length > 0" class="mt-4 space-y-3">
+						<template x-for="run in migrationRuns" :key="run.id || run.attempt_number">
+							<div
+								class="rounded-xl border p-4 text-xs"
+								:class="run.status === 'SUCCESS' ? 'border-emerald-200 bg-emerald-50/40' : 'border-rose-200 bg-rose-50/40'"
+							>
+								<div class="flex flex-wrap items-center justify-between gap-2">
+									<div class="flex items-center gap-2">
+										<span class="font-mono font-bold text-slate-900" x-text="`Attempt #${run.attempt_number}`"></span>
+										<span
+											class="rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase"
+											:class="run.status === 'SUCCESS' ? 'bg-emerald-100 text-emerald-800' : 'bg-rose-100 text-rose-800'"
+											x-text="run.status === 'ROLLED_BACK' ? 'ROLLED BACK (ATOMIC)' : run.status"
+										></span>
+										<span class="text-slate-500" x-text="`${run.execution_ms ?? 0} ms`"></span>
+									</div>
+									<div class="text-slate-500">
+										<span>Executed by User #</span><span class="font-mono" x-text="run.executed_by"></span>
+										<span class="mx-1">·</span>
+										<span x-text="formatDateTime(run.started_at)"></span>
+									</div>
+								</div>
+
+								<template x-if="run.error_message">
+									<div class="mt-2.5 rounded-lg border border-rose-200 bg-white p-2.5 font-mono text-rose-700">
+										<p class="font-sans text-[11px] font-semibold text-rose-900">Database Error (Transaction Rolled Back):</p>
+										<p class="mt-1 whitespace-pre-wrap" x-text="run.error_message"></p>
+									</div>
+								</template>
+
+								<details class="mt-2.5">
+									<summary class="cursor-pointer font-medium text-slate-600 hover:text-slate-900">View SQL snapshot executed in this attempt</summary>
+									<pre class="mt-2 overflow-x-auto rounded-lg bg-slate-900 p-3 font-mono text-[11px] text-slate-100" x-text="run.sql_snapshot"></pre>
+								</details>
+							</div>
+						</template>
+					</div>
+				</div>
+			</div>
+		</div>
+	</div>
+
+	<!-- ========================================================= -->
+	<!-- TAB 4: EXPLAIN / EXPLAIN ANALYZE (BONUS)                  -->
+	<!-- ========================================================= -->
+	<div x-show="activeTab === 'explain'" x-cloak class="space-y-6">
+		<div class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
+			<div class="flex flex-col justify-between gap-4 sm:flex-row sm:items-center">
+				<div>
+					<h2 class="text-lg font-semibold text-slate-950">PostgreSQL Query Execution Plan (<code class="font-mono text-base text-indigo-600">EXPLAIN</code>)</h2>
+					<p class="mt-1 text-xs text-slate-500">
+						Inspect estimated startup/total cost, index vs. sequential scans, and actual runtime metrics. Even when <code class="font-mono">EXPLAIN ANALYZE</code> is enabled, execution is wrapped inside a transaction that always rolls back safely.
+					</p>
+				</div>
+
+				<div class="flex flex-wrap items-center gap-3">
+					<label class="inline-flex cursor-pointer items-center gap-2 text-xs font-medium text-slate-700">
+						<input type="checkbox" class="rounded border-slate-300 text-indigo-600" x-model="explainAnalyze" />
+						<span>Include <code class="font-mono">ANALYZE</code> (actual timing &amp; buffers)</span>
+					</label>
+					<button
+						type="button"
+						class="button-primary"
+						:disabled="runningExplain || !explainSQL.trim()"
+						@click="runExplainPlan()"
+					>
+						<span x-text="runningExplain ? 'Analyzing plan…' : '⚡ Run EXPLAIN'"></span>
+					</button>
+				</div>
+			</div>
+
+			<div class="mt-4">
+				<textarea
+					class="field min-h-[120px] w-full font-mono text-xs leading-relaxed"
+					placeholder="SELECT * FROM users WHERE id = 1;"
+					x-model="explainSQL"
+				></textarea>
+			</div>
+		</div>
+
+		<template x-if="explainResult">
+			<div class="space-y-6">
+				<!-- Summary Metrics -->
+				<div class="grid gap-4 sm:grid-cols-4">
+					<div class="rounded-2xl border border-slate-200 bg-white p-4">
+						<p class="text-xs text-slate-500">Root Node Strategy</p>
+						<p class="mt-1.5 font-mono text-lg font-semibold text-indigo-700" x-text="explainResult.root?.node_type || '—'"></p>
+					</div>
+					<div class="rounded-2xl border border-slate-200 bg-white p-4">
+						<p class="text-xs text-slate-500">Estimated Total Cost</p>
+						<p class="mt-1.5 font-mono text-lg font-semibold text-slate-900" x-text="explainResult.root?.total_cost ?? '—'"></p>
+					</div>
+					<div class="rounded-2xl border border-slate-200 bg-white p-4">
+						<p class="text-xs text-slate-500">Planning Time</p>
+						<p class="mt-1.5 font-mono text-lg font-semibold text-slate-900" x-text="`${explainResult.planning_time_ms ?? 0} ms`"></p>
+					</div>
+					<div class="rounded-2xl border border-slate-200 bg-white p-4">
+						<p class="text-xs text-slate-500">Execution Time</p>
+						<p class="mt-1.5 font-mono text-lg font-semibold text-emerald-700" x-text="explainResult.analyzed ? `${explainResult.execution_time_ms ?? 0} ms` : 'Not analyzed'"></p>
+					</div>
+				</div>
+
+				<!-- Plan Tree Table -->
+				<div class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+					<h3 class="text-sm font-semibold text-slate-900">Execution Plan Node Tree</h3>
+					<div class="mt-4 overflow-x-auto rounded-xl border border-slate-200">
+						<table class="min-w-full divide-y divide-slate-200 text-left text-xs">
+							<thead class="bg-slate-50 font-semibold text-slate-700">
+								<tr>
+									<th class="px-4 py-2.5">Operation / Node Type</th>
+									<th class="px-4 py-2.5">Target / Index</th>
+									<th class="px-4 py-2.5">Startup → Total Cost</th>
+									<th class="px-4 py-2.5">Plan Rows</th>
+									<th class="px-4 py-2.5">Actual Rows</th>
+									<th class="px-4 py-2.5">Actual Time (ms)</th>
+									<th class="px-4 py-2.5">Filter / Condition</th>
+								</tr>
+							</thead>
+							<tbody class="divide-y divide-slate-100 bg-white font-mono">
+								<template x-for="(item, idx) in flattenedExplainNodes" :key="idx">
+									<tr class="hover:bg-slate-50">
+										<td class="whitespace-nowrap px-4 py-2.5 font-semibold text-slate-900">
+											<span :style="`padding-left: ${item.depth * 18}px`" class="inline-flex items-center gap-1.5">
+												<span x-show="item.depth > 0" class="text-slate-400">↳</span>
+												<span x-text="item.node.node_type"></span>
+											</span>
+										</td>
+										<td class="px-4 py-2.5 text-indigo-700" x-text="item.node.relation_name || item.node.index_name || '—'"></td>
+										<td class="px-4 py-2.5 text-slate-700" x-text="`${item.node.startup_cost ?? 0} → ${item.node.total_cost ?? 0}`"></td>
+										<td class="px-4 py-2.5 text-slate-700" x-text="item.node.plan_rows ?? 0"></td>
+										<td class="px-4 py-2.5 text-slate-700" x-text="explainResult.analyzed ? (item.node.actual_rows ?? 0) : '—'"></td>
+										<td class="px-4 py-2.5 text-emerald-700" x-text="explainResult.analyzed ? `${item.node.actual_total_time_ms ?? 0} ms` : '—'"></td>
+										<td class="max-w-xs truncate px-4 py-2.5 text-slate-500" x-text="item.node.filter || item.node.index_cond || '—'"></td>
+									</tr>
+								</template>
+							</tbody>
+						</table>
+					</div>
+
+					<details class="mt-4 text-xs">
+						<summary class="cursor-pointer font-medium text-slate-600 hover:text-slate-900">Show Raw PostgreSQL EXPLAIN JSON</summary>
+						<pre class="mt-2 max-h-80 overflow-auto rounded-xl bg-slate-900 p-4 font-mono text-[11px] text-slate-100" x-text="explainResult.raw_json"></pre>
+					</details>
+				</div>
+			</div>
+		</template>
+	</div>
+
+	<!-- ========================================================= -->
+	<!-- TAB 5: SCHEMA DIFF & DDL GENERATOR (BONUS)                -->
+	<!-- ========================================================= -->
+	<div x-show="activeTab === 'schemadiff'" x-cloak class="space-y-6">
+		<div class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
+			<div class="flex flex-col justify-between gap-4 sm:flex-row sm:items-center">
+				<div>
+					<h2 class="text-lg font-semibold text-slate-950">Declarative Schema Diff &amp; Migration Generator</h2>
+					<p class="mt-1 text-xs text-slate-500">
+						Define your desired target tables and columns below (or import the current schema from the viewer), then compare against the live database to generate candidate <code class="font-mono">CREATE TABLE</code> / <code class="font-mono">ALTER TABLE</code> migration SQL.
+					</p>
+				</div>
+				<div class="flex flex-wrap gap-2">
+					<button type="button" class="button-secondary text-xs" @click="importCurrentSchemaIntoDiff()">
+						↓ Load current schema tables
+					</button>
+					<button type="button" class="button-secondary text-xs" @click="addDiffTable()">
+						+ Add Desired Table
+					</button>
+					<button
+						type="button"
+						class="button-primary"
+						:disabled="runningSchemaDiff"
+						@click="runSchemaDiff()"
+					>
+						<span x-text="runningSchemaDiff ? 'Comparing schema…' : 'Δ Compare Schema'"></span>
+					</button>
+				</div>
+			</div>
+
+			<div class="mt-4 max-w-xs">
+				<label class="block text-xs font-semibold uppercase tracking-wide text-slate-500">
+					Target Schema Name
+					<input type="text" class="field mt-1" x-model="diffSchemaName" placeholder="public" />
+				</label>
+			</div>
+
+			<!-- Desired Tables Builder -->
+			<div class="mt-5 space-y-4">
+				<template x-for="(tbl, tIdx) in diffDesiredTables" :key="tIdx">
+					<div class="rounded-xl border border-slate-200 bg-slate-50/60 p-4">
+						<div class="flex flex-wrap items-center justify-between gap-3">
+							<div class="flex items-center gap-2">
+								<span class="text-xs font-semibold text-slate-500">Table:</span>
+								<input
+									type="text"
+									class="field bg-white py-1.5 font-mono text-xs font-semibold"
+									placeholder="table_name"
+									x-model="tbl.name"
+								/>
+							</div>
+							<div class="flex items-center gap-2">
+								<button type="button" class="button-secondary px-2.5 py-1 text-xs" @click="addDiffColumn(tIdx)">+ Column</button>
+								<button type="button" class="button-danger px-2.5 py-1 text-xs" @click="removeDiffTable(tIdx)">Remove table</button>
+							</div>
+						</div>
+
+						<div class="mt-3 space-y-2">
+							<template x-for="(col, cIdx) in tbl.columns" :key="cIdx">
+								<div class="grid gap-2 sm:grid-cols-[1fr_1fr_1fr_auto_auto_auto] sm:items-center">
+									<input type="text" class="field bg-white py-1 font-mono text-xs" placeholder="column_name" x-model="col.name" />
+									<input type="text" class="field bg-white py-1 font-mono text-xs" placeholder="TEXT / BIGINT / TIMESTAMPTZ" x-model="col.data_type" />
+									<input type="text" class="field bg-white py-1 font-mono text-xs" placeholder="Default (optional)" x-model="col.default_value" />
+									<label class="inline-flex items-center gap-1.5 text-xs text-slate-700">
+										<input type="checkbox" x-model="col.is_nullable" />
+										<span>Nullable</span>
+									</label>
+									<label class="inline-flex items-center gap-1.5 text-xs text-slate-700">
+										<input type="checkbox" x-model="col.is_primary_key" />
+										<span>PK</span>
+									</label>
+									<button type="button" class="text-xs font-semibold text-rose-600 hover:underline" @click="removeDiffColumn(tIdx, cIdx)">×</button>
+								</div>
+							</template>
+						</div>
+					</div>
+				</template>
+			</div>
+		</div>
+
+		<!-- Schema Diff Output -->
+		<template x-if="schemaDiffResult">
+			<div class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
+				<div class="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 pb-4">
+					<div>
+						<h3 class="text-base font-semibold text-slate-950">Schema Comparison Result</h3>
+						<p class="text-xs text-slate-500" x-text="schemaDiffResult.has_changes ? 'Differences detected between current database schema and desired target.' : 'No differences detected — live schema matches desired target.'"></p>
+					</div>
+					<button
+						x-show="schemaDiffResult.has_changes && schemaDiffResult.generated_sql"
+						type="button"
+						class="button-primary"
+						@click="loadDiffIntoMigrationDraft()"
+					>
+						Load Generated SQL into Migration Draft →
+					</button>
+				</div>
+
+				<div class="mt-4 grid gap-4 sm:grid-cols-3">
+					<div class="rounded-xl border border-emerald-200 bg-emerald-50/50 p-3">
+						<p class="text-xs font-semibold text-emerald-900">Added Tables</p>
+						<p class="mt-1 font-mono text-xs text-emerald-800" x-text="(schemaDiffResult.added_tables || []).join(', ') || 'None'"></p>
+					</div>
+					<div class="rounded-xl border border-amber-200 bg-amber-50/50 p-3">
+						<p class="text-xs font-semibold text-amber-900">Column Changes</p>
+						<p class="mt-1 font-mono text-xs text-amber-800" x-text="`${(schemaDiffResult.added_columns || []).length} added · ${(schemaDiffResult.modified_columns || []).length} modified · ${(schemaDiffResult.dropped_columns || []).length} dropped`"></p>
+					</div>
+					<div class="rounded-xl border border-rose-200 bg-rose-50/50 p-3">
+						<p class="text-xs font-semibold text-rose-900">Dropped Tables</p>
+						<p class="mt-1 font-mono text-xs text-rose-800" x-text="(schemaDiffResult.dropped_tables || []).join(', ') || 'None'"></p>
+					</div>
+				</div>
+
+				<div class="mt-4">
+					<p class="text-xs font-semibold uppercase tracking-wide text-slate-500">Generated Candidate Migration SQL</p>
+					<pre class="mt-2 overflow-x-auto rounded-xl bg-slate-900 p-4 font-mono text-xs text-slate-100" x-text="schemaDiffResult.generated_sql || '-- No schema changes required.'"></pre>
+				</div>
+			</div>
+		</template>
+	</div>
+</section>
+
+<script is:inline>
+	window.databaseWorkspace = function () {
+		return {
+			activeConnection: null,
+			activeTab: 'viewer',
+			error: '',
+			notice: '',
+			testingPing: false,
+
+			// Viewer state
+			schemas: [],
+			selectedSchema: 'public',
+			tables: [],
+			tableFilter: '',
+			loadingTables: false,
+			selectedTable: '',
+			viewerSubTab: 'rows',
+			loadingTableData: false,
+			tableRows: [],
+			rowColumns: [],
+			rowsLimit: 50,
+			rowsOffset: 0,
+			rowsSortColumn: '',
+			rowsSortDir: 'asc',
+			tableColumns: [],
+			tableConstraints: [],
+			tableIndexes: [],
+
+			// Read-only Query state
+			querySQL: 'SELECT table_schema, table_name FROM information_schema.tables WHERE table_schema NOT IN (\'pg_catalog\', \'information_schema\') ORDER BY 1, 2 LIMIT 50;',
+			runningQuery: false,
+			queryResultColumns: [],
+			queryResultRows: [],
+
+			// Migrations state
+			migrations: [],
+			migrationStatusFilter: 'ALL',
+			loadingMigrations: false,
+			selectedMigration: null,
+			migrationRuns: [],
+			savingMigration: false,
+			executingMigration: false,
+			migrationForm: {
+				title: '',
+				description: '',
+				sql_content: ''
+			},
+
+			// Explain state
+			explainSQL: 'SELECT * FROM information_schema.tables LIMIT 25;',
+			explainAnalyze: true,
+			runningExplain: false,
+			explainResult: null,
+
+			// Schema Diff state
+			diffSchemaName: 'public',
+			runningSchemaDiff: false,
+			schemaDiffResult: null,
+			diffDesiredTables: [
+				{
+					name: 'app_Release_notes',
+					columns: [
+						{ name: 'id', data_type: 'BIGINT', is_nullable: false, default_value: '', is_primary_key: true },
+						{ name: 'version_tag', data_type: 'TEXT', is_nullable: false, default_value: '', is_primary_key: false },
+						{ name: 'published_at', data_type: 'TIMESTAMPTZ', is_nullable: false, default_value: 'NOW()', is_primary_key: false }
+					]
+				}
+			],
+
+			get apiBase() {
+				return document.documentElement.dataset.apiBase || '';
+			},
+
+			get filteredTables() {
+				const q = this.tableFilter.trim().toLowerCase();
+				if (!q) return this.tables;
+				return this.tables.filter((t) => (t.name || '').toLowerCase().includes(q));
+			},
+
+			get filteredMigrations() {
+				if (this.migrationStatusFilter === 'ALL') return this.migrations;
+				return this.migrations.filter((m) => m.status === this.migrationStatusFilter);
+			},
+
+			get sqlGuardrailWarning() {
+				const raw = (this.migrationForm.sql_content || '').toUpperCase();
+				if (/\b(BEGIN|COMMIT|ROLLBACK|START\s+TRANSACTION)\b/.test(raw)) {
+					return 'Guardrail warning: Avoid manual BEGIN, COMMIT, or ROLLBACK statements. The migration service automatically wraps your script in an atomic transaction.';
+				}
+				if (/\b(CREATE\s+DATABASE|DROP\s+DATABASE)\b/.test(raw)) {
+					return 'Guardrail warning: CREATE DATABASE and DROP DATABASE cannot run inside a PostgreSQL transaction block.';
+				}
+				return '';
+			},
+
+			get flattenedExplainNodes() {
+				if (!this.explainResult || !this.explainResult.root) return [];
+				const out = [];
+				const walk = (node, depth) => {
+					if (!node) return;
+					out.push({ node, depth });
+					if (Array.isArray(node.plans)) {
+						node.plans.forEach((child) => walk(child, depth + 1));
+					}
+				};
+				walk(this.explainResult.root, 0);
+				return out;
+			},
+
+			initWorkspace() {
+				window.addEventListener('datadock:select-db', (e) => {
+					if (e.detail) {
+						this.openWorkspace(e.detail);
+					}
+				});
+
+				const params = new URLSearchParams(window.location.search);
+				const connId = params.get('id') || params.get('connection');
+				if (connId) {
+					this.restoreConnectionById(connId);
+				}
+			},
+
+			async apiFetch(path, options = {}) {
+				const res = await fetch(`${this.apiBase}${path}`, {
+					credentials: 'include',
+					headers: {
+						'Content-Type': 'application/json',
+						...(options.headers || {})
+					},
+					...options
+				});
+				const contentType = res.headers.get('content-type') || '';
+				const payload = contentType.includes('application/json') ? await res.json().catch(() => null) : await res.text().catch(() => '');
+				if (!res.ok) {
+					const msg =
+						(payload && (payload.message || payload.error)) ||
+						(typeof payload === 'string' && payload) ||
+						`Request failed (${res.status})`;
+					throw new Error(msg);
+				}
+				return payload;
+			},
+
+			toggleDashboardVisibility(showDashboard) {
+				const dash = document.getElementById('datadock-connection-dashboard');
+				if (dash) {
+					dash.style.display = showDashboard ? '' : 'none';
+				}
+			},
+
+			async restoreConnectionById(id) {
+				try {
+					const data = await this.apiFetch(`/api/v1/connections/${encodeURIComponent(id)}`);
+					const conn = data?.connection || data;
+					if (conn && conn.id) {
+						this.openWorkspace(conn, false);
+					}
+				} catch (_) {
+					// Fallback if single-connection endpoint fails: try listing connections
+					try {
+						const listData = await this.apiFetch('/api/v1/connections');
+						const list = Array.isArray(listData) ? listData : listData?.connections || [];
+						const match = list.find((c) => String(c.id) === String(id));
+						if (match) this.openWorkspace(match, false);
+					} catch (_) {}
+				}
+			},
+
+			openWorkspace(connection, pushUrl = true) {
+				this.activeConnection = connection;
+				this.error = '';
+				this.notice = '';
+				this.selectedTable = '';
+				this.selectedMigration = null;
+				this.migrationRuns = [];
+				this.explainResult = null;
+				this.schemaDiffResult = null;
+				this.toggleDashboardVisibility(false);
+
+				if (pushUrl) {
+					const url = new URL(window.location.href);
+					url.searchParams.set('id', connection.id);
+					window.history.pushState({}, '', url.toString());
+				}
+
+				this.loadSchemas();
+				this.loadMigrations();
+			},
+
+			closeWorkspace() {
+				this.activeConnection = null;
+				this.error = '';
+				this.notice = '';
+				this.toggleDashboardVisibility(true);
+				const url = new URL(window.location.href);
+				url.searchParams.delete('id');
+				url.searchParams.delete('connection');
+				window.history.pushState({}, '', url.toString());
+			},
+
+			switchTab(tab) {
+				this.activeTab = tab;
+				this.error = '';
+				if (tab === 'viewer' && this.schemas.length === 0) {
+					this.loadSchemas();
+				}
+				if (tab === 'migrations') {
+					this.loadMigrations();
+				}
+			},
+
+			refreshActiveTab() {
+				if (this.activeTab === 'viewer') {
+					this.loadSchemas();
+				} else if (this.activeTab === 'migrations') {
+					this.loadMigrations();
+				}
+			},
+
+			async pingConnection() {
+				if (!this.activeConnection) return;
+				this.testingPing = true;
+				this.error = '';
+				this.notice = '';
+				try {
+					const res = await this.apiFetch(`/api/v1/connections/${encodeURIComponent(this.activeConnection.id)}/test`, {
+						method: 'POST'
+					});
+					this.activeConnection.reachable = true;
+					const latency = res?.latencyMs !== undefined ? ` (${res.latencyMs} ms)` : '';
+					this.notice = `Connection "${this.activeConnection.name}" is reachable${latency}.`;
+				} catch (err) {
+					this.activeConnection.reachable = false;
+					this.error = err.message;
+				} finally {
+					this.testingPing = false;
+				}
+			},
+
+			// ==================== VIEWER METHODS ====================
+			async loadSchemas() {
+				if (!this.activeConnection) return;
+				try {
+					const data = await this.apiFetch(`/api/v1/connections/${encodeURIComponent(this.activeConnection.id)}/schemas`);
+					const raw = Array.isArray(data) ? data : data?.schemas || [];
+					this.schemas = raw.map((s) => (typeof s === 'string' ? s : s.name || s.schema_name)).filter(Boolean);
+					if (this.schemas.length > 0 && !this.schemas.includes(this.selectedSchema)) {
+						this.selectedSchema = this.schemas.includes('public') ? 'public' : this.schemas[0];
+					}
+					if (this.selectedSchema) {
+						await this.loadTables();
+					}
+				} catch (err) {
+					this.error = err.message;
+				}
+			},
+
+			async loadTables() {
+				if (!this.activeConnection || !this.selectedSchema) return;
+				this.loadingTables = true;
+				try {
+					const data = await this.apiFetch(
+						`/api/v1/connections/${encodeURIComponent(this.activeConnection.id)}/schemas/${encodeURIComponent(this.selectedSchema)}/tables`
+					);
+					const raw = Array.isArray(data) ? data : data?.tables || [];
+					this.tables = raw.map((t) => (typeof t === 'string' ? { name: t, type: 'TABLE' } : { name: t.name || t.table_name, type: t.type || t.table_type || 'TABLE' }));
+					if (this.tables.length > 0 && !this.tables.some((t) => t.name === this.selectedTable)) {
+						this.selectTable(this.tables[0].name);
+					} else if (this.tables.length === 0) {
+						this.selectedTable = '';
+					}
+				} catch (err) {
+					this.error = err.message;
+				} finally {
+					this.loadingTables = false;
+				}
+			},
+
+			async selectTable(tableName) {
+				this.selectedTable = tableName;
+				this.rowsOffset = 0;
+				this.rowsSortColumn = '';
+				await Promise.all([
+					this.loadTableRows(),
+					this.loadTableMetadata()
+				]);
+			},
+
+			switchViewerSubTab(subTab) {
+				this.viewerSubTab = subTab;
+			},
+
+			async loadTableRows() {
+				if (!this.activeConnection || !this.selectedSchema || !this.selectedTable) return;
+				this.loadingTableData = true;
+				try {
+					const params = new URLSearchParams({
+						limit: String(this.rowsLimit),
+						offset: String(this.rowsOffset)
+					});
+					if (this.rowsSortColumn) {
+						params.set('sort', this.rowsSortColumn);
+						params.set('direction', this.rowsSortDir);
+					}
+					const data = await this.apiFetch(
+						`/api/v1/connections/${encodeURIComponent(this.activeConnection.id)}/schemas/${encodeURIComponent(this.selectedSchema)}/tables/${encodeURIComponent(this.selectedTable)}/rows?${params.toString()}`
+					);
+					const rows = Array.isArray(data) ? data : data?.rows || data?.data || [];
+					this.tableRows = rows;
+					if (Array.isArray(data?.columns) && data.columns.length > 0) {
+						this.rowColumns = data.columns.map((c) => (typeof c === 'string' ? c : c.name));
+					} else if (rows.length > 0 && typeof rows[0] === 'object') {
+						this.rowColumns = Object.keys(rows[0]);
+					} else if (this.tableColumns.length > 0) {
+						this.rowColumns = this.tableColumns.map((c) => c.name);
+					} else {
+						this.rowColumns = [];
+					}
+				} catch (err) {
+					this.error = err.message;
+				} finally {
+					this.loadingTableData = false;
+				}
+			},
+
+			async loadTableMetadata() {
+				if (!this.activeConnection || !this.selectedSchema || !this.selectedTable) return;
+				const base = `/api/v1/connections/${encodeURIComponent(this.activeConnection.id)}/schemas/${encodeURIComponent(this.selectedSchema)}/tables/${encodeURIComponent(this.selectedTable)}`;
+				const [cols, cons, idxs] = await Promise.all([
+					this.apiFetch(`${base}/columns`).catch(() => []),
+					this.apiFetch(`${base}/constraints`).catch(() => []),
+					this.apiFetch(`${base}/indexes`).catch(() => [])
+				]);
+				this.tableColumns = Array.isArray(cols) ? cols : cols?.columns || [];
+				this.tableConstraints = Array.isArray(cons) ? cons : cons?.constraints || [];
+				this.tableIndexes = Array.isArray(idxs) ? idxs : idxs?.indexes || [];
+			},
+
+			prevRowsPage() {
+				this.rowsOffset = Math.max(0, this.rowsOffset - this.rowsLimit);
+				this.loadTableRows();
+			},
+
+			nextRowsPage() {
+				this.rowsOffset += this.rowsLimit;
+				this.loadTableRows();
+			},
+
+			openQueryForSelectedTable() {
+				if (!this.selectedTable) return;
+				this.querySQL = `SELECT * FROM "${this.selectedSchema}"."${this.selectedTable}" LIMIT 50;`;
+				this.activeTab = 'query';
+				this.runReadOnlyQuery();
+			},
+
+			// ==================== READ-ONLY QUERY METHODS ====================
+			async runReadOnlyQuery() {
+				if (!this.activeConnection || !this.querySQL.trim()) return;
+				this.runningQuery = true;
+				this.error = '';
+				try {
+					const data = await this.apiFetch(`/api/v1/connections/${encodeURIComponent(this.activeConnection.id)}/query`, {
+						method: 'POST',
+						body: JSON.stringify({
+							sql: this.querySQL,
+							query: this.querySQL,
+							sql_content: this.querySQL,
+							limit: 100
+						})
+					});
+					const rows = Array.isArray(data) ? data : data?.rows || data?.data || [];
+					this.queryResultRows = rows;
+					if (Array.isArray(data?.columns) && data.columns.length > 0) {
+						this.queryResultColumns = data.columns.map((c) => (typeof c === 'string' ? c : c.name));
+					} else if (rows.length > 0 && typeof rows[0] === 'object') {
+						this.queryResultColumns = Object.keys(rows[0]);
+					} else {
+						this.queryResultColumns = [];
+					}
+				} catch (err) {
+					this.error = err.message;
+				} finally {
+					this.runningQuery = false;
+				}
+			},
+
+			sendQueryToExplain() {
+				this.explainSQL = this.querySQL;
+				this.activeTab = 'explain';
+				this.runExplainPlan();
+			},
+
+			// ==================== MIGRATION METHODS ====================
+			async loadMigrations() {
+				if (!this.activeConnection) return;
+				this.loadingMigrations = true;
+				try {
+					const data = await this.apiFetch(`/api/v1/connections/${encodeURIComponent(this.activeConnection.id)}/migrations`);
+					this.migrations = Array.isArray(data) ? data : data?.migrations || [];
+					if (this.selectedMigration) {
+						const refreshed = this.migrations.find((m) => m.id === this.selectedMigration.id);
+						if (refreshed) {
+							await this.selectMigration(refreshed.id);
+						}
+					}
+				} catch (err) {
+					// Do not block workspace if migration routes are not yet mounted on a non-postgres db
+					this.migrations = [];
+				} finally {
+					this.loadingMigrations = false;
+				}
+			},
+
+			startNewMigrationDraft() {
+				this.selectedMigration = null;
+				this.migrationRuns = [];
+				this.migrationForm = {
+					title: '',
+					description: '',
+					sql_content: ''
+				};
+				this.error = '';
+			},
+
+			async selectMigration(migrationID) {
+				if (!this.activeConnection) return;
+				this.error = '';
+				try {
+					const data = await this.apiFetch(
+						`/api/v1/connections/${encodeURIComponent(this.activeConnection.id)}/migrations/${encodeURIComponent(migrationID)}`
+					);
+					const mig = data?.migration || data;
+					this.selectedMigration = mig;
+					this.migrationRuns = data?.runs || mig?.runs || [];
+					this.migrationForm = {
+						title: mig?.title || '',
+						description: mig?.description || '',
+						sql_content: mig?.sql_content || ''
+					};
+				} catch (err) {
+					this.error = err.message;
+				}
+			},
+
+			async createMigrationDraft() {
+				if (!this.activeConnection) return;
+				this.savingMigration = true;
+				this.error = '';
+				this.notice = '';
+				try {
+					const created = await this.apiFetch(`/api/v1/connections/${encodeURIComponent(this.activeConnection.id)}/migrations`, {
+						method: 'POST',
+						body: JSON.stringify(this.migrationForm)
+					});
+					const mig = created?.migration || created;
+					this.notice = `Draft migration "${mig.title}" (#${mig.id}) saved.`;
+					await this.loadMigrations();
+					if (mig?.id) {
+						await this.selectMigration(mig.id);
+					}
+				} catch (err) {
+					this.error = err.message;
+				} finally {
+					this.savingMigration = false;
+				}
+			},
+
+			async updateMigrationDraft() {
+				if (!this.activeConnection || !this.selectedMigration) return;
+				this.savingMigration = true;
+				this.error = '';
+				this.notice = '';
+				try {
+					const updated = await this.apiFetch(
+						`/api/v1/connections/${encodeURIComponent(this.activeConnection.id)}/migrations/${encodeURIComponent(this.selectedMigration.id)}`,
+						{
+							method: 'PATCH',
+							body: JSON.stringify(this.migrationForm)
+						}
+					);
+					const mig = updated?.migration || updated;
+					this.selectedMigration = mig;
+					this.notice = `Migration #${mig.id} updated.`;
+					await this.loadMigrations();
+				} catch (err) {
+					this.error = err.message;
+				} finally {
+					this.savingMigration = false;
+				}
+			},
+
+			async executeSelectedMigration() {
+				if (!this.activeConnection || !this.selectedMigration) return;
+				this.executingMigration = true;
+				this.error = '';
+				this.notice = '';
+				try {
+					const res = await this.apiFetch(
+						`/api/v1/connections/${encodeURIComponent(this.activeConnection.id)}/migrations/${encodeURIComponent(this.selectedMigration.id)}/execute`,
+						{ method: 'POST' }
+					);
+					const mig = res?.migration || res;
+					this.notice = `Migration "${mig.title}" executed atomically and committed as version v${mig.version}!`;
+					await this.loadMigrations();
+					await this.selectMigration(this.selectedMigration.id);
+					await this.loadSchemas();
+				} catch (err) {
+					this.error = `Transaction rolled back automatically: ${err.message}`;
+					await this.loadMigrations();
+					await this.selectMigration(this.selectedMigration.id);
+				} finally {
+					this.executingMigration = false;
+				}
+			},
+
+			sendMigrationSQLToExplain() {
+				this.explainSQL = this.migrationForm.sql_content;
+				this.activeTab = 'explain';
+				this.runExplainPlan();
+			},
+
+			// ==================== EXPLAIN PLAN METHODS ====================
+			async runExplainPlan() {
+				if (!this.activeConnection || !this.explainSQL.trim()) return;
+				this.runningExplain = true;
+				this.error = '';
+				try {
+					const res = await this.apiFetch(`/api/v1/connections/${encodeURIComponent(this.activeConnection.id)}/migrations/explain`, {
+						method: 'POST',
+						body: JSON.stringify({
+							sql_content: this.explainSQL,
+							analyze: this.explainAnalyze
+						})
+					});
+					this.explainResult = res;
+				} catch (err) {
+					this.error = err.message;
+				} finally {
+					this.runningExplain = false;
+				}
+			},
+
+			// ==================== SCHEMA DIFF METHODS ====================
+			addDiffTable() {
+				this.diffDesiredTables.push({
+					name: `new_table_${this.diffDesiredTables.length + 1}`,
+					columns: [
+						{ name: 'id', data_type: 'BIGINT', is_nullable: false, default_value: '', is_primary_key: true }
+					]
+				});
+			},
+
+			removeDiffTable(tIdx) {
+				this.diffDesiredTables.splice(tIdx, 1);
+			},
+
+			addDiffColumn(tIdx) {
+				this.diffDesiredTables[tIdx].columns.push({
+					name: '',
+					data_type: 'TEXT',
+					is_nullable: true,
+					default_value: '',
+					is_primary_key: false
+				});
+			},
+
+			removeDiffColumn(tIdx, cIdx) {
+				this.diffDesiredTables[tIdx].columns.splice(cIdx, 1);
+			},
+
+			async importCurrentSchemaIntoDiff() {
+				if (!this.activeConnection) return;
+				this.error = '';
+				this.notice = '';
+				try {
+					const schema = this.diffSchemaName || this.selectedSchema || 'public';
+					const tblData = await this.apiFetch(
+						`/api/v1/connections/${encodeURIComponent(this.activeConnection.id)}/schemas/${encodeURIComponent(schema)}/tables`
+					);
+					const rawTables = Array.isArray(tblData) ? tblData : tblData?.tables || [];
+					const imported = [];
+					for (const t of rawTables) {
+						const tName = typeof t === 'string' ? t : t.name || t.table_name;
+						if (!tName) continue;
+						const colData = await this.apiFetch(
+							`/api/v1/connections/${encodeURIComponent(this.activeConnection.id)}/schemas/${encodeURIComponent(schema)}/tables/${encodeURIComponent(tName)}/columns`
+						).catch(() => []);
+						const rawCols = Array.isArray(colData) ? colData : colData?.columns || [];
+						imported.push({
+							name: tName,
+							columns: rawCols.map((c) => ({
+								name: c.name,
+								data_type: c.dataType || c.data_type || c.type || 'TEXT',
+								is_nullable: Boolean(c.nullable ?? c.is_nullable),
+								default_value: c.default ?? c.column_default ?? c.defaultValue ?? '',
+								is_primary_key: Boolean(c.primaryKey ?? c.is_primary_key)
+							}))
+						});
+					}
+					this.diffDesiredTables = imported;
+					this.notice = `Loaded ${imported.length} table(s) from schema "${schema}". Modify them below and click Compare Schema.`;
+				} catch (err) {
+					this.error = err.message;
+				}
+			},
+
+			async runSchemaDiff() {
+				if (!this.activeConnection) return;
+				this.runningSchemaDiff = true;
+				this.error = '';
+				try {
+					const res = await this.apiFetch(`/api/v1/connections/${encodeURIComponent(this.activeConnection.id)}/migrations/schema-diff`, {
+						method: 'POST',
+						body: JSON.stringify({
+							schema_name: this.diffSchemaName || 'public',
+							desired_tables: this.diffDesiredTables
+						})
+					});
+					this.schemaDiffResult = res;
+				} catch (err) {
+					this.error = err.message;
+				} finally {
+					this.runningSchemaDiff = false;
+				}
+			},
+
+			loadDiffIntoMigrationDraft() {
+				if (!this.schemaDiffResult || !this.schemaDiffResult.generated_sql) return;
+				this.selectedMigration = null;
+				this.migrationRuns = [];
+				this.migrationForm = {
+					title: `schema_diff_${this.diffSchemaName || 'public'}_${new Date().toISOString().slice(0, 10)}`,
+					description: 'Auto-generated from Declarative Schema Diff',
+					sql_content: this.schemaDiffResult.generated_sql
+				};
+				this.activeTab = 'migrations';
+				this.notice = 'Generated DDL loaded into a new migration draft. Review and save when ready.';
+			},
+
+			// ==================== FORMATTERS ====================
+			formatCellValue(val) {
+				if (val === null || val === undefined) return 'NULL';
+				if (typeof val === 'object') return JSON.stringify(val);
+				return String(val);
+			},
+
+			formatDateTime(iso) {
+				if (!iso) return '—';
+				const d = new Date(iso);
+				if (Number.isNaN(d.getTime())) return iso;
+				return d.toLocaleString();
+			}
+		};
+	};
+</script>

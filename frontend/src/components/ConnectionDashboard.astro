@@ -3,12 +3,12 @@ const { admin = false } = Astro.props;
 const title = admin ? 'Manage databases' : 'Databases';
 ---
 
-<section x-data={`connectionDashboard(${admin})`} class="mx-auto max-w-6xl">
+<section id="datadock-connection-dashboard" x-data={`connectionDashboard(${admin})`} class="mx-auto max-w-6xl">
 	<div class="flex flex-col justify-between gap-5 sm:flex-row sm:items-end">
 		<div>
 			<p class="mb-2 text-sm font-medium text-indigo-600">Workspace / {admin ? 'Administration' : 'Overview'}</p>
 			<h1 class="text-3xl font-semibold tracking-tight text-slate-950">{title}</h1>
-			<p class="mt-2 max-w-xl text-sm leading-6 text-slate-500">{admin ? 'Manage saved database connections and their runtime availability.' : 'Browse your database connections and check which databases are currently reachable.'}</p>
+			<p class="mt-2 max-w-xl text-sm leading-6 text-slate-500">{admin ? 'Manage saved database connections and their runtime availability.' : 'Select any database card below to explore schemas, run SQL queries, and manage transactional migrations.'}</p>
 		</div>
 		<div class="flex items-center gap-3">
 			{admin && <a href="/admin/db/new" class="button-primary"><span class="text-lg leading-none">+</span> New connection</a>}
@@ -22,7 +22,7 @@ const title = admin ? 'Manage databases' : 'Databases';
 	</div>
 
 	<div class="mt-9 flex flex-col justify-between gap-4 sm:flex-row sm:items-center">
-		<div><h2 class="text-lg font-semibold tracking-tight">All connections</h2><p class="mt-1 text-sm text-slate-500">{admin ? 'Connection cards are informational; use the actions to manage runtime access.' : 'Connection details will be available here.'}</p></div>
+		<div><h2 class="text-lg font-semibold tracking-tight">All connections</h2><p class="mt-1 text-sm text-slate-500">{admin ? 'Connection cards are informational; use the actions to manage runtime access.' : 'Click a database card to open its Schema Viewer, Query Runner, and Migration Manager.'}</p></div>
 		<label class="relative block w-full sm:max-w-xs"><span class="sr-only">Filter connections</span><span class="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400">⌕</span><input class="field pl-9" type="search" x-model="filter" placeholder="Filter connections" /></label>
 	</div>
 
@@ -40,22 +40,46 @@ const title = admin ? 'Manage databases' : 'Databases';
 
 	<div x-show="!loading && visibleConnections.length > 0" x-cloak class="mt-5 grid gap-4 md:grid-cols-2 xl:grid-cols-3">
 		<template x-for="connection in visibleConnections" :key="connection.id">
-			<article class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm shadow-slate-950/[0.02]">
-				<div class="flex items-start justify-between gap-3">
-					<div class="flex min-w-0 items-center gap-3">
-						<div class="grid size-11 shrink-0 place-items-center rounded-xl bg-indigo-50 font-semibold uppercase text-indigo-700" x-text="connection.driver.slice(0, 2)"></div>
-						<div class="min-w-0"><h3 class="truncate font-semibold text-slate-950" x-text="connection.name"></h3><p class="mt-1 text-xs uppercase tracking-wide text-slate-500" x-text="connection.driver"></p></div>
+			<article
+				class="group flex flex-col justify-between rounded-2xl border border-slate-200 bg-white p-5 shadow-sm shadow-slate-950/[0.02] transition hover:border-indigo-300 hover:shadow-md"
+				:class="!admin ? 'cursor-pointer' : ''"
+				@click="!admin && window.dispatchEvent(new CustomEvent('datadock:select-db', { detail: connection }))"
+			>
+				<div>
+					<div class="flex items-start justify-between gap-3">
+						<div class="flex min-w-0 items-center gap-3">
+							<div class="grid size-11 shrink-0 place-items-center rounded-xl bg-indigo-50 font-semibold uppercase text-indigo-700 transition group-hover:bg-indigo-600 group-hover:text-white" x-text="connection.driver.slice(0, 2)"></div>
+							<div class="min-w-0">
+								<h3 class="truncate font-semibold text-slate-950 group-hover:text-indigo-600" x-text="connection.name"></h3>
+								<p class="mt-1 text-xs uppercase tracking-wide text-slate-500" x-text="connection.driver"></p>
+							</div>
+						</div>
+						<span class="inline-flex shrink-0 items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium"
+							:class="connection.checking ? 'bg-slate-100 text-slate-500' : connection.reachable ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-800'">
+							<span class="size-1.5 rounded-full" :class="connection.checking ? 'bg-slate-400' : connection.reachable ? 'bg-emerald-500' : 'bg-amber-500'"></span>
+							<span x-text="connection.checking ? 'Checking' : connection.reachable ? 'Connected' : connection.connected ? 'Unavailable' : 'Disconnected'"></span>
+						</span>
 					</div>
-					<span class="inline-flex shrink-0 items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium"
-						:class="connection.checking ? 'bg-slate-100 text-slate-500' : connection.reachable ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-800'">
-						<span class="size-1.5 rounded-full" :class="connection.checking ? 'bg-slate-400' : connection.reachable ? 'bg-emerald-500' : 'bg-amber-500'"></span>
-						<span x-text="connection.checking ? 'Checking' : connection.reachable ? 'Connected' : connection.connected ? 'Unavailable' : 'Disconnected'"></span>
-					</span>
+					<div class="mt-5 grid grid-cols-2 gap-3 border-t border-slate-100 pt-4 text-xs">
+						<div><p class="text-slate-400">Pool max</p><p class="mt-1 font-medium text-slate-700" x-text="connection.pool?.maxOpen || 'Default'"></p></div>
+						<div><p class="text-slate-400">Idle pool</p><p class="mt-1 font-medium text-slate-700" x-text="connection.pool?.maxIdle ?? '—'"></p></div>
+					</div>
 				</div>
-				<div class="mt-5 grid grid-cols-2 gap-3 border-t border-slate-100 pt-4 text-xs">
-					<div><p class="text-slate-400">Pool max</p><p class="mt-1 font-medium text-slate-700" x-text="connection.pool?.maxOpen || 'Default'"></p></div>
-					<div><p class="text-slate-400">Idle pool</p><p class="mt-1 font-medium text-slate-700" x-text="connection.pool?.maxIdle ?? '—'"></p></div>
-				</div>
+
+				{!admin && (
+					<div class="mt-5 flex items-center justify-between border-t border-slate-100 pt-4">
+						<span class="text-xs font-medium text-slate-500" x-text="connection.driver === 'postgres' ? 'Viewer · Query · Migrations' : 'Viewer · Query Runner'"></span>
+						<button
+							type="button"
+							class="inline-flex items-center gap-1.5 text-xs font-semibold text-indigo-600 group-hover:text-indigo-700"
+							@click.stop="window.dispatchEvent(new CustomEvent('datadock:select-db', { detail: connection }))"
+						>
+							<span>Open workspace</span>
+							<span aria-hidden="true">→</span>
+						</button>
+					</div>
+				)}
+
 				{admin && <div class="mt-5 flex flex-wrap gap-2 border-t border-slate-100 pt-4">
 					<button type="button" class="button-secondary flex-1" :disabled="busy === `${connection.id}:connect` || busy === `${connection.id}:disconnect`" @click="action(connection, connection.connected ? 'disconnect' : 'connect')">
 						<span x-show="busy === `${connection.id}:connect` || busy === `${connection.id}:disconnect`">Working…</span>
