@@ -53,6 +53,9 @@ func HighestDatabaseAccess(access UserAccess, databaseID string) AccessLevel {
 	if access.UserID == "" || !access.Active || databaseID == "" {
 		return NoAccess
 	}
+	if access.IsPlatformAdmin {
+		return ViewEdit
+	}
 	groups := make(map[string]struct{}, len(access.GroupIDs))
 	for _, id := range access.GroupIDs {
 		if id != "" {
@@ -89,6 +92,9 @@ func Authorize(access UserAccess, action Action, databaseID string) error {
 			return nil
 		}
 	case ReadSchema, ReadData, ReadMigration:
+		if access.IsPlatformAdmin {
+			return nil
+		}
 		if HighestDatabaseAccess(access, databaseID) >= ViewOnly {
 			return nil
 		}
