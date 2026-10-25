@@ -22,7 +22,7 @@ const title = admin ? 'Manage databases' : 'Databases';
 	</div>
 
 	<div class="mt-9 flex flex-col justify-between gap-4 sm:flex-row sm:items-center">
-		<div><h2 class="text-lg font-semibold tracking-tight">All connections</h2><p class="mt-1 text-sm text-slate-500">{admin ? 'Connection cards are informational; use the actions to manage runtime access.' : 'Click a database card to open its Schema Viewer, Query Runner, and Migration Manager.'}</p></div>
+		<div><h2 class="text-lg font-semibold tracking-tight">All connections</h2><p class="mt-1 text-sm text-slate-500">{admin ? 'Click a database card to edit its connection settings.' : 'Click a database card to open its Schema Viewer, Query Runner, and Migration Manager.'}</p></div>
 		<label class="relative block w-full sm:max-w-xs"><span class="sr-only">Filter connections</span><span class="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400">⌕</span><input class="field pl-9" type="search" x-model="filter" placeholder="Filter connections" /></label>
 	</div>
 
@@ -41,9 +41,8 @@ const title = admin ? 'Manage databases' : 'Databases';
 	<div x-show="!loading && visibleConnections.length > 0" x-cloak class="mt-5 grid gap-4 md:grid-cols-2 xl:grid-cols-3">
 		<template x-for="connection in visibleConnections" :key="connection.id">
 			<article
-				class="group flex flex-col justify-between rounded-2xl border border-slate-200 bg-white p-5 shadow-sm shadow-slate-950/[0.02] transition hover:border-indigo-300 hover:shadow-md"
-				:class="!admin ? 'cursor-pointer' : ''"
-				@click="!admin && window.dispatchEvent(new CustomEvent('datadock:select-db', { detail: connection }))"
+				class="group flex cursor-pointer flex-col justify-between rounded-2xl border border-slate-200 bg-white p-5 shadow-sm shadow-slate-950/[0.02] transition hover:border-indigo-300 hover:shadow-md"
+				@click="admin ? window.location.assign('/admin/db/edit?id=' + encodeURIComponent(connection.id)) : window.dispatchEvent(new CustomEvent('datadock:select-db', { detail: connection }))"
 			>
 				<div>
 					<div class="flex items-start justify-between gap-3">
@@ -80,7 +79,8 @@ const title = admin ? 'Manage databases' : 'Databases';
 					</div>
 				)}
 
-				{admin && <div class="mt-5 flex flex-wrap gap-2 border-t border-slate-100 pt-4">
+				{admin && <div class="mt-5 flex flex-wrap gap-2 border-t border-slate-100 pt-4" @click.stop>
+					<a class="button-secondary" :href="'/admin/db/edit?id=' + encodeURIComponent(connection.id)">Edit</a>
 					<button type="button" class="button-secondary flex-1" :disabled="busy === `${connection.id}:connect` || busy === `${connection.id}:disconnect`" @click="action(connection, connection.connected ? 'disconnect' : 'connect')">
 						<span x-show="busy === `${connection.id}:connect` || busy === `${connection.id}:disconnect`">Working…</span>
 						<span x-show="busy !== `${connection.id}:connect` && busy !== `${connection.id}:disconnect`" x-text="connection.connected ? 'Disconnect' : 'Connect'"></span>

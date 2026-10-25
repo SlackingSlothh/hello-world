@@ -1,7 +1,9 @@
 import Alpine from 'alpinejs';
 import databaseWorkspace from './databaseWorkspace.js';
+import editConnectionForm from './editConnectionForm.js';
 
 Alpine.data('databaseWorkspace', databaseWorkspace);
+Alpine.data('editConnectionForm', editConnectionForm);
 
 const apiBase = (document.documentElement.dataset.apiBase || '').replace(/\/+$/, '');
 const apiURL = (path) => `${apiBase}${path}`;

@@ -36,7 +36,7 @@ test('database card opens schema, table rows and metadata', async t => {
  const { workspace, browser, dashboard } = setup(t, catalogResponse);
  workspace.initWorkspace();
  const card = readFileSync(new URL('../../components/ConnectionDashboard.astro', import.meta.url), 'utf8');
- const expression = card.match(/@click="(!admin[^\n]+)"/)[1];
+ const expression = card.match(/@click="(admin \?[^\n]+)"/)[1];
  new Function('admin', 'connection', 'window', expression)(false, connection, browser);
  await new Promise(setImmediate);
  assert.equal(workspace.activeConnection.id, 'cinema');
