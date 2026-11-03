@@ -1,0 +1,1629 @@
+openapi: 3.1.0
+info:
+  title: DataDock Backend API
+  version: 1.0.0
+  description: |
+    OpenAPI description of the HTTP routes registered by the backend.
+
+    Protected endpoints use the `session_id` cookie established by
+    `POST /auth/login`. Endpoints under `/api/v1` additionally enforce
+    connection permissions or platform-admin permissions as described per
+    operation.     Mutating requests are same-origin protected.
+
+    Database connection DSNs are accepted on create/update but are never
+    returned in connection representations. MySQL and MariaDB are supported
+    as target databases. The migration runner rejects MySQL/MariaDB statements
+    that can cause implicit commits.
+servers:
+  - url: /
+    description: Same-origin deployment
+tags:
+  - name: Authentication
+  - name: Connections
+  - name: Catalog
+  - name: Query
+  - name: Migrations
+  - name: Access administration
+security:
+  - sessionCookie: []
+paths:
+  /auth/login:
+    post:
+      tags: [Authentication]
+      operationId: login
+      summary: Start an authenticated session
+      description: |
+        Accepts URL-encoded credentials, validates them, and sets the HttpOnly
+        `session_id` cookie. The endpoint rejects query parameters and
+        cross-origin requests. The cookie is Secure in HTTPS deployments.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              required: [username, password]
+              properties:
+                username:
+                  type: string
+                password:
+                  type: string
+                  format: password
+      responses:
+        "204":
+          description: Login succeeded; session cookie set.
+          headers:
+            Set-Cookie:
+              description: HttpOnly session cookie.
+              schema:
+                type: string
+        "400":
+          description: Invalid form, query parameters, cookie, or origin.
+        "401":
+          description: Invalid username or password.
+        "413":
+          description: Request body exceeds 8 KiB.
+        "415":
+          description: Content-Type must be application/x-www-form-urlencoded.
+        "503":
+          description: Authentication or session service unavailable.
+  /auth/logout:
+    post:
+      tags: [Authentication]
+      operationId: logout
+      summary: End the current session
+      description: Requires an empty URL-encoded form; query parameters and cross-origin requests are rejected.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              maxProperties: 0
+      responses:
+        "204":
+          description: Session ended; session cookie cleared.
+          headers:
+            Set-Cookie:
+              description: Expired session cookie.
+              schema:
+                type: string
+        "400":
+          description: Invalid form, session cookie, query parameters, or origin.
+        "413":
+          description: Request body exceeds 8 KiB.
+        "415":
+          description: Content-Type must be application/x-www-form-urlencoded.
+        "503":
+          description: Logout service unavailable.
+  /auth/session:
+    get:
+      tags: [Authentication]
+      operationId: getSessionStatus
+      summary: Check whether the session is valid
+      responses:
+        "204":
+          description: Session is valid.
+        "401":
+          description: Session is missing or invalid.
+        "503":
+          description: Session service unavailable.
+  /auth/admin-session:
+    get:
+      tags: [Authentication]
+      operationId: getAdminSessionStatus
+      summary: Check whether the current session has admin permission
+      responses:
+        "204":
+          description: Session is valid and has ManageConnections permission.
+        "401":
+          description: Session is missing or invalid.
+        "403":
+          description: User is not a platform admin.
+        "503":
+          description: Session or authorization service unavailable.
+
+  /api/v1/connections:
+    get:
+      tags: [Connections]
+      operationId: listConnections
+      summary: List connections visible to the current user
+      description: Returns only connections for which the user has ReadSchema access. DSNs are omitted.
+      responses:
+        "200":
+          description: Visible managed connections.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Connection"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "503":
+          description: Could not load connection permissions.
+    post:
+      tags: [Connections]
+      operationId: createConnection
+      summary: Create and verify a managed connection
+      description: Admin-only. Opens and pings the target before saving its encrypted DSN and returning safe connection metadata.
+      security:
+        - sessionCookie: []
+      x-required-permission: ManageConnections
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ConnectionCreate"
+      responses:
+        "201":
+          description: Connection created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Connection"
+        "400":
+          description: Invalid request or target connection could not be created/verified.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /api/v1/connections/{id}:
+    parameters:
+      - $ref: "#/components/parameters/ConnectionID"
+    get:
+      tags: [Connections]
+      operationId: getConnection
+      summary: Get safe connection metadata
+      x-required-permission: ReadSchema
+      responses:
+        "200":
+          description: Connection metadata; DSN is not returned.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Connection"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    patch:
+      tags: [Connections]
+      operationId: updateConnection
+      summary: Update connection settings
+      description: Admin-only. Replacement DSNs are verified before the active connection is swapped; failed replacement keeps old settings.
+      x-required-permission: ManageConnections
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ConnectionUpdate"
+      responses:
+        "200":
+          description: Updated connection metadata.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Connection"
+        "400":
+          description: Invalid update.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "502":
+          description: Replacement target could not be verified; previous settings remain active.
+        "503":
+          description: Could not save connection settings.
+    delete:
+      tags: [Connections]
+      operationId: deleteConnection
+      summary: Delete a managed connection
+      description: Admin-only. Deletes its saved settings and closes its runtime pool.
+      x-required-permission: ManageConnections
+      responses:
+        "204":
+          description: Connection deleted.
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/OperationFailed"
+  /api/v1/connections/{id}/settings:
+    get:
+      tags: [Connections]
+      operationId: getConnectionSettings
+      summary: Get connection settings metadata
+      description: Admin-only. Returns the same safe public connection view; the DSN is never returned.
+      x-required-permission: ManageConnections
+      parameters:
+        - $ref: "#/components/parameters/ConnectionID"
+      responses:
+        "200":
+          description: Safe connection metadata.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Connection"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /api/v1/connections/{id}/test:
+    post:
+      tags: [Connections]
+      operationId: testConnection
+      summary: Ping a managed database
+      x-required-permission: ReadSchema
+      parameters:
+        - $ref: "#/components/parameters/ConnectionID"
+      responses:
+        "200":
+          description: Ping succeeded.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok, latencyMs]
+                properties:
+                  ok:
+                    type: boolean
+                    const: true
+                  latencyMs:
+                    type: number
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "502":
+          description: Database ping failed.
+  /api/v1/connections/{id}/connect:
+    post:
+      tags: [Connections]
+      operationId: connectConnection
+      summary: Connect a disconnected managed database
+      description: Admin-only. Opens and pings a pool using the saved configuration.
+      x-required-permission: ManageConnections
+      parameters:
+        - $ref: "#/components/parameters/ConnectionID"
+      responses:
+        "200":
+          description: Connection is active.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Connection"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/OperationFailed"
+  /api/v1/connections/{id}/disconnect:
+    post:
+      tags: [Connections]
+      operationId: disconnectConnection
+      summary: Disconnect a managed database
+      description: Admin-only. Closes the runtime pool but retains saved settings.
+      x-required-permission: ManageConnections
+      parameters:
+        - $ref: "#/components/parameters/ConnectionID"
+      responses:
+        "204":
+          description: Connection disconnected.
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/OperationFailed"
+
+  /api/v1/connections/{id}/schemas:
+    get:
+      tags: [Catalog]
+      operationId: listSchemas
+      summary: List database schemas
+      x-required-permission: ReadSchema
+      parameters:
+        - $ref: "#/components/parameters/ConnectionID"
+      responses:
+        "200":
+          description: Schemas.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Schema"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/OperationFailed"
+  /api/v1/connections/{id}/schemas/{schema}/tables:
+    get:
+      tags: [Catalog]
+      operationId: listTables
+      summary: List tables in a schema
+      x-required-permission: ReadSchema
+      parameters:
+        - $ref: "#/components/parameters/ConnectionID"
+        - $ref: "#/components/parameters/SchemaName"
+      responses:
+        "200":
+          description: Tables.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Table"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/OperationFailed"
+  /api/v1/connections/{id}/schemas/{schema}/tables/{table}:
+    get:
+      tags: [Catalog]
+      operationId: getTable
+      summary: Get table metadata
+      x-required-permission: ReadSchema
+      parameters:
+        - $ref: "#/components/parameters/ConnectionID"
+        - $ref: "#/components/parameters/SchemaName"
+        - $ref: "#/components/parameters/TableName"
+      responses:
+        "200":
+          description: Table metadata.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Table"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/OperationFailed"
+  /api/v1/connections/{id}/schemas/{schema}/tables/{table}/columns:
+    get:
+      tags: [Catalog]
+      operationId: listTableColumns
+      summary: List table columns
+      x-required-permission: ReadSchema
+      parameters:
+        - $ref: "#/components/parameters/ConnectionID"
+        - $ref: "#/components/parameters/SchemaName"
+        - $ref: "#/components/parameters/TableName"
+      responses:
+        "200":
+          description: Table columns.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Column"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/OperationFailed"
+  /api/v1/connections/{id}/schemas/{schema}/tables/{table}/constraints:
+    get:
+      tags: [Catalog]
+      operationId: listTableConstraints
+      summary: List table constraints
+      x-required-permission: ReadSchema
+      parameters:
+        - $ref: "#/components/parameters/ConnectionID"
+        - $ref: "#/components/parameters/SchemaName"
+        - $ref: "#/components/parameters/TableName"
+      responses:
+        "200":
+          description: Table constraints.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Constraint"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/OperationFailed"
+  /api/v1/connections/{id}/schemas/{schema}/tables/{table}/indexes:
+    get:
+      tags: [Catalog]
+      operationId: listTableIndexes
+      summary: List table indexes
+      x-required-permission: ReadSchema
+      parameters:
+        - $ref: "#/components/parameters/ConnectionID"
+        - $ref: "#/components/parameters/SchemaName"
+        - $ref: "#/components/parameters/TableName"
+      responses:
+        "200":
+          description: Table indexes.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Index"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/OperationFailed"
+  /api/v1/connections/{id}/schemas/{schema}/tables/{table}/rows:
+    get:
+      tags: [Catalog]
+      operationId: listTableRows
+      summary: Read a page of table rows
+      x-required-permission: ReadData
+      parameters:
+        - $ref: "#/components/parameters/ConnectionID"
+        - $ref: "#/components/parameters/SchemaName"
+        - $ref: "#/components/parameters/TableName"
+        - name: limit
+          in: query
+          description: Page size, default 50, maximum 500.
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 500
+            default: 50
+        - name: offset
+          in: query
+          schema:
+            type: integer
+            minimum: 0
+            default: 0
+        - name: column
+          in: query
+          description: Columns to return; may be supplied multiple times.
+          style: form
+          explode: true
+          schema:
+            type: array
+            items:
+              type: string
+        - name: sort
+          in: query
+          schema:
+            type: string
+        - name: direction
+          in: query
+          schema:
+            type: string
+            enum: [asc, desc]
+        - name: "filter.{column}"
+          in: query
+          description: Filter by a column; use the column name in place of {column}.
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Rows and paging metadata.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RowsPage"
+        "400":
+          $ref: "#/components/responses/InvalidRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/OperationFailed"
+  /api/v1/connections/{id}/query:
+    post:
+      tags: [Query]
+      operationId: executeReadQuery
+      summary: Execute a read-only SELECT query
+      description: Only a single SELECT is accepted. Query execution has a 15-second timeout and a maximum/default result limit of 500/50.
+      x-required-permission: ReadData
+      parameters:
+        - $ref: "#/components/parameters/ConnectionID"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/QueryRequest"
+      responses:
+        "200":
+          description: Query result.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/QueryResult"
+        "400":
+          $ref: "#/components/responses/InvalidRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/OperationFailed"
+
+  /api/v1/connections/{id}/migrations:
+    parameters:
+      - $ref: "#/components/parameters/ConnectionID"
+    get:
+      tags: [Migrations]
+      operationId: listMigrations
+      summary: List migrations for a connection
+      x-required-permission: ReadMigration
+      responses:
+        "200":
+          description: Migrations.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [database_id, migrations]
+                properties:
+                  database_id:
+                    type: string
+                  migrations:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Migration"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "500":
+          $ref: "#/components/responses/OperationFailed"
+    post:
+      tags: [Migrations]
+      operationId: createMigration
+      summary: Create a migration draft
+      x-required-permission: CreateMigration
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [title, sql_content]
+              properties:
+                title:
+                  type: string
+                description:
+                  type: string
+                sql_content:
+                  type: string
+      responses:
+        "201":
+          description: Draft created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Migration"
+        "400":
+          $ref: "#/components/responses/InvalidRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "422":
+          description: SQL is invalid or not transaction-safe.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          $ref: "#/components/responses/OperationFailed"
+  /api/v1/connections/{id}/migrations/{migrationID}:
+    parameters:
+      - $ref: "#/components/parameters/ConnectionID"
+      - $ref: "#/components/parameters/MigrationID"
+    get:
+      tags: [Migrations]
+      operationId: getMigration
+      summary: Get migration and execution history
+      x-required-permission: ReadMigration
+      responses:
+        "200":
+          description: Migration details and runs.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MigrationDetail"
+        "400":
+          $ref: "#/components/responses/InvalidRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/OperationFailed"
+    patch:
+      tags: [Migrations]
+      operationId: updateMigration
+      summary: Update a draft migration
+      description: Applied migrations cannot be edited.
+      x-required-permission: UpdateMigration
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [sql_content]
+              properties:
+                title:
+                  type: string
+                description:
+                  type: string
+                sql_content:
+                  type: string
+      responses:
+        "200":
+          description: Updated migration.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Migration"
+        "400":
+          $ref: "#/components/responses/InvalidRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: Migration has already been applied.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "422":
+          description: SQL is invalid or not transaction-safe.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          $ref: "#/components/responses/OperationFailed"
+  /api/v1/connections/{id}/migrations/{migrationID}/execute:
+    post:
+      tags: [Migrations]
+      operationId: executeMigration
+      summary: Execute a migration
+      description: Runs the migration in a target transaction, records the execution attempt, and assigns a linear version on success.
+      x-required-permission: ExecuteMigration
+      parameters:
+        - $ref: "#/components/parameters/ConnectionID"
+        - $ref: "#/components/parameters/MigrationID"
+      responses:
+        "200":
+          description: Execution result, including migration and run state.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ExecuteResult"
+        "400":
+          $ref: "#/components/responses/InvalidRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: Another migration is running or this migration was already applied.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "422":
+          description: SQL validation or execution failed; failed target execution is rolled back.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          $ref: "#/components/responses/OperationFailed"
+  /api/v1/connections/{id}/migrations/explain:
+    post:
+      tags: [Migrations]
+      operationId: explainMigrationQuery
+      summary: Explain a query
+      description: Validates and explains the query in a transaction that is rolled back.
+      x-required-permission: ExecuteMigration
+      parameters:
+        - $ref: "#/components/parameters/ConnectionID"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [sql_content]
+              properties:
+                sql_content:
+                  type: string
+                analyze:
+                  type: boolean
+                  default: false
+      responses:
+        "200":
+          description: Explain plan summary.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ExplainPlan"
+        "400":
+          $ref: "#/components/responses/InvalidRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "422":
+          description: SQL is invalid or explain execution failed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          $ref: "#/components/responses/OperationFailed"
+  /api/v1/connections/{id}/migrations/schema-diff:
+    post:
+      tags: [Migrations]
+      operationId: generateSchemaDiff
+      summary: Compare current schema with a desired schema
+      x-required-permission: ReadMigration
+      parameters:
+        - $ref: "#/components/parameters/ConnectionID"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [desired_tables]
+              properties:
+                schema_name:
+                  type: string
+                desired_tables:
+                  type: array
+                  items:
+                    $ref: "#/components/schemas/DesiredTable"
+      responses:
+        "200":
+          description: Schema difference and candidate SQL.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SchemaDiff"
+        "400":
+          $ref: "#/components/responses/InvalidRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "500":
+          $ref: "#/components/responses/OperationFailed"
+
+  /api/v1/access/users:
+    post:
+      tags: [Access administration]
+      operationId: createUser
+      summary: Create a user
+      description: Admin-only. The password is hashed before persistence. Exactly one username and password field are accepted.
+      x-required-permission: ManageConnections
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              required: [username, password]
+              properties:
+                username:
+                  type: string
+                  minLength: 1
+                  maxLength: 100
+                password:
+                  type: string
+                  format: password
+                  minLength: 1
+                  maxLength: 1024
+      responses:
+        "201":
+          description: User created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/User"
+        "400":
+          description: Invalid form or user input.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          description: Username already exists.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "413":
+          description: Form exceeds 8 KiB.
+        "415":
+          description: Content-Type must be application/x-www-form-urlencoded.
+        "503":
+          description: User store unavailable.
+  /api/v1/access/groups:
+    get:
+      tags: [Access administration]
+      operationId: listGroupsAndGrants
+      summary: List groups, connection grants, and connection options
+      x-required-permission: ManageConnections
+      responses:
+        "200":
+          description: Groups and safe connection options for the admin UI.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [groups, connections]
+                properties:
+                  groups:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/AccessGroup"
+                  connections:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/ConnectionOption"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "503":
+          description: Could not load group grants.
+    post:
+      tags: [Access administration]
+      operationId: createGroup
+      summary: Create an access group
+      x-required-permission: ManageConnections
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name:
+                  type: string
+                  minLength: 1
+                  maxLength: 100
+      responses:
+        "201":
+          description: Group created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AccessGroup"
+        "400":
+          description: Invalid group name or JSON body.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          description: Group name already exists.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "503":
+          description: Group store unavailable.
+  /api/v1/access/groups/{groupID}/members:
+    get:
+      tags: [Access administration]
+      operationId: listGroupMembers
+      summary: List users and membership state for a group
+      x-required-permission: ManageConnections
+      parameters:
+        - $ref: "#/components/parameters/GroupID"
+      responses:
+        "200":
+          description: Group members and non-members.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/GroupMember"
+        "400":
+          $ref: "#/components/responses/InvalidRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "503":
+          description: Membership store unavailable.
+  /api/v1/access/groups/{groupID}/members/{userID}:
+    parameters:
+      - $ref: "#/components/parameters/GroupID"
+      - $ref: "#/components/parameters/UserID"
+    put:
+      tags: [Access administration]
+      operationId: addGroupMember
+      summary: Add a user to a group
+      x-required-permission: ManageConnections
+      responses:
+        "204":
+          description: Membership added.
+        "400":
+          $ref: "#/components/responses/InvalidRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "503":
+          description: Membership store unavailable.
+    delete:
+      tags: [Access administration]
+      operationId: removeGroupMember
+      summary: Remove a user from a group
+      x-required-permission: ManageConnections
+      responses:
+        "204":
+          description: Membership removed.
+        "400":
+          $ref: "#/components/responses/InvalidRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "503":
+          description: Membership store unavailable.
+  /api/v1/access/groups/{groupID}/connections/{connectionID}:
+    parameters:
+      - $ref: "#/components/parameters/GroupID"
+      - name: connectionID
+        in: path
+        required: true
+        schema:
+          type: string
+    put:
+      tags: [Access administration]
+      operationId: setGroupConnectionAccess
+      summary: Grant a group read or write access to a connection
+      x-required-permission: ManageConnections
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [access]
+              properties:
+                access:
+                  type: string
+                  enum: [read, write]
+      responses:
+        "204":
+          description: Grant saved.
+        "400":
+          description: Access must be read or write.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "503":
+          description: Access store unavailable.
+    delete:
+      tags: [Access administration]
+      operationId: deleteGroupConnectionAccess
+      summary: Remove a group's connection grant
+      x-required-permission: ManageConnections
+      responses:
+        "204":
+          description: Grant removed.
+        "400":
+          $ref: "#/components/responses/InvalidRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "503":
+          description: Access store unavailable.
+
+components:
+  securitySchemes:
+    sessionCookie:
+      type: apiKey
+      in: cookie
+      name: session_id
+      description: HttpOnly session cookie set by POST /auth/login.
+  parameters:
+    ConnectionID:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: string
+    SchemaName:
+      name: schema
+      in: path
+      required: true
+      schema:
+        type: string
+    TableName:
+      name: table
+      in: path
+      required: true
+      schema:
+        type: string
+    MigrationID:
+      name: migrationID
+      in: path
+      required: true
+      schema:
+        type: integer
+        format: int64
+        minimum: 1
+    GroupID:
+      name: groupID
+      in: path
+      required: true
+      schema:
+        type: string
+    UserID:
+      name: userID
+      in: path
+      required: true
+      schema:
+        type: string
+  responses:
+    Unauthorized:
+      description: Missing or invalid session.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+        text/plain:
+          schema:
+            type: string
+    Forbidden:
+      description: Authenticated user lacks the required permission.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+        text/plain:
+          schema:
+            type: string
+    NotFound:
+      description: Connection or database object not found.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    InvalidRequest:
+      description: Request body, query, or path parameter is invalid.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    OperationFailed:
+      description: Operation failed.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+  schemas:
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code:
+              type: string
+            message:
+              type: string
+    PoolConfig:
+      type: object
+      properties:
+        maxOpen:
+          type: integer
+          minimum: 0
+        maxIdle:
+          type: integer
+          minimum: 0
+        maxLifetimeSeconds:
+          type: integer
+          minimum: 0
+        maxIdleTimeSeconds:
+          type: integer
+          minimum: 0
+    PoolStats:
+      type: object
+      properties:
+        MaxOpenConnections:
+          type: integer
+        OpenConnections:
+          type: integer
+        InUse:
+          type: integer
+        Idle:
+          type: integer
+        WaitCount:
+          type: integer
+          format: int64
+        WaitDuration:
+          type: integer
+          format: int64
+        MaxIdleClosed:
+          type: integer
+          format: int64
+        MaxIdleTimeClosed:
+          type: integer
+          format: int64
+        MaxLifetimeClosed:
+          type: integer
+          format: int64
+    Connection:
+      type: object
+      required: [id, name, driver, connected, createdAt, pool, poolStats]
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        driver:
+          type: string
+          enum: [postgres, mysql, mariadb]
+        connected:
+          type: boolean
+        createdAt:
+          type: string
+          format: date-time
+        pool:
+          $ref: "#/components/schemas/PoolConfig"
+        poolStats:
+          $ref: "#/components/schemas/PoolStats"
+      description: Public connection representation. DSN and credentials are intentionally omitted.
+    ConnectionCreate:
+      type: object
+      required: [name, driver, dsn]
+      properties:
+        name:
+          type: string
+        driver:
+          type: string
+          enum: [postgres, postgresql, pgx, mysql, mariadb, maria]
+        dsn:
+          type: string
+          writeOnly: true
+          description: Target database connection string. Never returned by the API.
+        pool:
+          $ref: "#/components/schemas/PoolConfig"
+    ConnectionUpdate:
+      type: object
+      minProperties: 1
+      properties:
+        name:
+          type: string
+        driver:
+          type: string
+          enum: [postgres, postgresql, pgx, mysql, mariadb, maria]
+        dsn:
+          type: string
+          writeOnly: true
+          description: A new DSN is required when changing database engines.
+        pool:
+          $ref: "#/components/schemas/PoolConfig"
+    ConnectionOption:
+      type: object
+      required: [id, name, driver]
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        driver:
+          type: string
+    Schema:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+    Table:
+      type: object
+      required: [schema, name, type]
+      properties:
+        schema:
+          type: string
+        name:
+          type: string
+        type:
+          type: string
+    Column:
+      type: object
+      required: [name, position, type, nullable, ordinal]
+      properties:
+        name:
+          type: string
+        position:
+          type: integer
+        type:
+          type: string
+        nullable:
+          type: boolean
+        default:
+          description: Database-specific default value.
+        ordinal:
+          type: integer
+    Constraint:
+      type: object
+      required: [name, type, columns]
+      properties:
+        name:
+          type: string
+        type:
+          type: string
+        columns:
+          type: array
+          items:
+            type: string
+        definition:
+          type: string
+    Index:
+      type: object
+      required: [name, unique, columns]
+      properties:
+        name:
+          type: string
+        unique:
+          type: boolean
+        method:
+          type: string
+        columns:
+          type: array
+          items:
+            type: string
+    RowsPage:
+      type: object
+      required: [columns, rows, limit, offset]
+      properties:
+        columns:
+          type: array
+          items:
+            type: string
+        rows:
+          type: array
+          items:
+            type: array
+            items: {}
+        limit:
+          type: integer
+        offset:
+          type: integer
+    QueryRequest:
+      type: object
+      required: [sql]
+      properties:
+        sql:
+          type: string
+          description: One read-only SELECT statement.
+        args:
+          type: array
+          items: {}
+        limit:
+          type: integer
+          minimum: 1
+          maximum: 500
+          default: 50
+    QueryResult:
+      type: object
+      required: [columns, rows]
+      properties:
+        columns:
+          type: array
+          items:
+            type: string
+        rows:
+          type: array
+          items:
+            type: array
+            items: {}
+    Migration:
+      type: object
+      required: [id, database_id, title, description, sql_content, status, created_by, updated_by, created_at, updated_at]
+      properties:
+        id:
+          type: integer
+          format: int64
+        database_id:
+          type: string
+        version:
+          type: [integer, "null"]
+          format: int64
+        title:
+          type: string
+        description:
+          type: string
+        sql_content:
+          type: string
+        status:
+          type: string
+          enum: [DRAFT, FAILED, APPLIED]
+        created_by:
+          type: string
+        updated_by:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        applied_at:
+          type: [string, "null"]
+          format: date-time
+    MigrationRun:
+      type: object
+      required: [id, migration_id, database_id, attempt_number, sql_snapshot, status, executed_by, execution_ms, started_at]
+      properties:
+        id:
+          type: integer
+          format: int64
+        migration_id:
+          type: integer
+          format: int64
+        database_id:
+          type: string
+        attempt_number:
+          type: integer
+        sql_snapshot:
+          type: string
+        status:
+          type: string
+          enum: [RUNNING, SUCCEEDED, FAILED]
+        executed_by:
+          type: string
+        error_message:
+          type: [string, "null"]
+        execution_ms:
+          type: integer
+          format: int64
+        started_at:
+          type: string
+          format: date-time
+        finished_at:
+          type: [string, "null"]
+          format: date-time
+    MigrationDetail:
+      type: object
+      required: [migration, runs]
+      properties:
+        migration:
+          $ref: "#/components/schemas/Migration"
+        runs:
+          type: array
+          items:
+            $ref: "#/components/schemas/MigrationRun"
+    ExecuteResult:
+      type: object
+      required: [migration, run]
+      properties:
+        migration:
+          $ref: "#/components/schemas/Migration"
+        run:
+          $ref: "#/components/schemas/MigrationRun"
+    ExplainPlan:
+      type: object
+      required: [node_type, startup_cost, total_cost, plan_rows, raw_json]
+      properties:
+        node_type:
+          type: string
+        relation_name:
+          type: string
+        index_name:
+          type: string
+        join_type:
+          type: string
+        startup_cost:
+          type: number
+        total_cost:
+          type: number
+        plan_rows:
+          type: integer
+          format: int64
+        actual_total_time_ms:
+          type: number
+        actual_rows:
+          type: integer
+          format: int64
+        planning_time_ms:
+          type: number
+        execution_time_ms:
+          type: number
+        children:
+          type: array
+          items:
+            $ref: "#/components/schemas/ExplainPlan"
+        raw_json:
+          type: string
+    DesiredColumn:
+      type: object
+      required: [name, data_type, is_nullable]
+      properties:
+        name:
+          type: string
+        data_type:
+          type: string
+        is_nullable:
+          type: boolean
+        default_val:
+          type: [string, "null"]
+        is_primary:
+          type: boolean
+    DesiredTable:
+      type: object
+      required: [table_name, columns]
+      properties:
+        table_name:
+          type: string
+        columns:
+          type: array
+          items:
+            $ref: "#/components/schemas/DesiredColumn"
+    SchemaDiff:
+      type: object
+      required: [added_tables, dropped_tables, added_columns, modified_columns, dropped_columns, candidate_sql]
+      properties:
+        added_tables:
+          type: array
+          items:
+            type: string
+        dropped_tables:
+          type: array
+          items:
+            type: string
+        added_columns:
+          type: array
+          items:
+            type: string
+        modified_columns:
+          type: array
+          items:
+            type: string
+        dropped_columns:
+          type: array
+          items:
+            type: string
+        candidate_sql:
+          type: string
+    User:
+      type: object
+      required: [id, username, active]
+      properties:
+        id:
+          type: string
+        username:
+          type: string
+        active:
+          type: boolean
+    GroupGrant:
+      type: object
+      required: [groupId, databaseId, access]
+      properties:
+        groupId:
+          type: string
+        databaseId:
+          type: string
+        access:
+          type: string
+          enum: [read, write]
+    AccessGroup:
+      type: object
+      required: [id, name, isAdmin, grants]
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        isAdmin:
+          type: boolean
+        grants:
+          type: array
+          items:
+            $ref: "#/components/schemas/GroupGrant"
+    GroupMember:
+      allOf:
+        - $ref: "#/components/schemas/User"
+        - type: object
+          required: [member]
+          properties:
+            member:
+              type: boolean
