@@ -66,7 +66,7 @@ func TestGroupMembershipAndSessions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	seed := persistence.SeedAccount{ID: "admin", Username: "admin", PasswordHash: encoded, PlatformAdmin: true, GroupID: "admins", GroupName: "Admins"}
+	seed := persistence.SeedAccount{ID: "admin", Username: "admin", PasswordHash: encoded, GroupIsAdmin: true, GroupID: "admins", GroupName: "Admins"}
 	if err := store.SeedAccount(ctx, seed); err != nil {
 		t.Fatal(err)
 	}

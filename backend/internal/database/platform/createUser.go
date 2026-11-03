@@ -8,8 +8,8 @@ import (
 )
 
 func (s *AuthStore) CreateUser(ctx context.Context, user accessapp.User, passwordHash string) error {
-	result, err := s.db.ExecContext(ctx, `INSERT INTO platform_users(id,username,password_hash,active,is_platform_admin)
-		VALUES($1,$2,$3,TRUE,FALSE) ON CONFLICT(username) DO NOTHING`, user.ID, user.Username, passwordHash)
+	result, err := s.db.ExecContext(ctx, `INSERT INTO platform_users(id,username,password_hash,active)
+		VALUES($1,$2,$3,TRUE) ON CONFLICT(username) DO NOTHING`, user.ID, user.Username, passwordHash)
 	if err != nil {
 		return fmt.Errorf("create user: %w", err)
 	}
