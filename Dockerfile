@@ -1,6 +1,6 @@
 FROM golang:1.26-bookworm AS backend-build
-WORKDIR /src/backend_v2
-COPY backend_v2/ ./
+WORKDIR /src/backend
+COPY backend/ ./
 RUN CGO_ENABLED=0 go build -o /out/server ./cmd/app
 
 FROM debian:bookworm-slim
