@@ -15,7 +15,7 @@ API contract is kept in `api/openapi.yaml`.
 ## Layout
 
 ```text
-backend_v2/
+backend/
 ├── api/
 │   └── openapi.yaml
 ├── cmd/
@@ -109,28 +109,28 @@ package and prevents a dependency cycle.
 
 ## Mapping from the former `backend/`
 
-| Former files/packages | Destination | Notes |
-|---|---|---|
-| `backend/main.go` | `cmd/app/main.go`, `internal/app/app.go`, and `internal/app/seed.go` | The entry point delegates startup and lifecycle to the composition root. |
-| `backend/server/config.go` | `internal/config/config.go` | Configuration loading/validation; no HTTP route registration. |
-| `backend/server/server.go` | `internal/transport/http/server/` | HTTP server construction and route mounting. App wiring remains in `internal/app`. |
-| `backend/handler/*.go` | `internal/transport/http/handler/` | API routes and handlers, split by access and migration responsibilities. |
-| `backend/httpapi/*.go` | `internal/transport/http/httpapi/` | Login/logout handlers, session and authorization middleware, and same-origin protection. |
-| `backend/app/connection/*.go` | `internal/services/connection/` | Connection-management use cases. |
-| `backend/app/catalog/service.go` | `internal/services/catalog/` | Catalog/query use cases, paging validation, and query restrictions. |
-| `backend/app/access/*.go` | `internal/services/access/` | User/group/membership/grant use cases and validation. |
-| `backend/migration/service.go` | `internal/services/migration/` | Migration lifecycle and orchestration. |
-| `backend/authn/`, `backend/authz/`, `backend/session/`, `backend/users/` | Matching feature packages under `internal/services/` | Authentication, authorization, session lifecycle, and user boundaries remain distinct. |
-| `backend/persistence/*.go` | `internal/database/platform/` | Internal PostgreSQL repositories for users, groups, memberships, grants, connections, and sessions. |
-| `backend/migration/postgres.go` | `internal/database/platform/migration_repository.go` | PostgreSQL store for migration metadata and run history, not the target connector. |
-| `backend/manageddb/*.go` | `internal/database/target/manageddb/` | Runtime target registry, driver allowlist, pool setup, and connection replacement. |
-| `backend/migration/target_sql.go` | `internal/database/target/migration/` | Target transaction, lock, explain, schema inspection, and dialect behavior. |
-| `backend/dialect/{postgres,mysql}/` | `internal/database/target/{postgres,mysql}/` | Dialect-specific target catalog implementations. |
-| `backend/dbops/catalog.go` | `internal/models/catalog/` and the catalog service's reader port | Separates shared catalog data types from the service-owned reader interface. |
-| `backend/dbops/query.go` | `internal/services/catalog/query_validation.go` | Read-only query policy is a business/security rule, not SQL persistence. |
-| `backend/migrations/` | `backend_v2/migrations/` | Platform schema scripts and their embedding runner remain together. |
-| `backend/api/openapi.yaml` | `backend_v2/api/openapi.yaml` | The API contract is kept beside the backend. |
-| `backend/**/test` and `*_test.go` | Tests beside their migrated feature packages | Reusable fakes stay in narrowly scoped test-support packages. |
+| Former files/packages                                                    | Destination                                                          | Notes                                                                                               |
+| ------------------------------------------------------------------------ | -------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
+| `backend/main.go`                                                        | `cmd/app/main.go`, `internal/app/app.go`, and `internal/app/seed.go` | The entry point delegates startup and lifecycle to the composition root.                            |
+| `backend/server/config.go`                                               | `internal/config/config.go`                                          | Configuration loading/validation; no HTTP route registration.                                       |
+| `backend/server/server.go`                                               | `internal/transport/http/server/`                                    | HTTP server construction and route mounting. App wiring remains in `internal/app`.                  |
+| `backend/handler/*.go`                                                   | `internal/transport/http/handler/`                                   | API routes and handlers, split by access and migration responsibilities.                            |
+| `backend/httpapi/*.go`                                                   | `internal/transport/http/httpapi/`                                   | Login/logout handlers, session and authorization middleware, and same-origin protection.            |
+| `backend/app/connection/*.go`                                            | `internal/services/connection/`                                      | Connection-management use cases.                                                                    |
+| `backend/app/catalog/service.go`                                         | `internal/services/catalog/`                                         | Catalog/query use cases, paging validation, and query restrictions.                                 |
+| `backend/app/access/*.go`                                                | `internal/services/access/`                                          | User/group/membership/grant use cases and validation.                                               |
+| `backend/migration/service.go`                                           | `internal/services/migration/`                                       | Migration lifecycle and orchestration.                                                              |
+| `backend/authn/`, `backend/authz/`, `backend/session/`, `backend/users/` | Matching feature packages under `internal/services/`                 | Authentication, authorization, session lifecycle, and user boundaries remain distinct.              |
+| `backend/persistence/*.go`                                               | `internal/database/platform/`                                        | Internal PostgreSQL repositories for users, groups, memberships, grants, connections, and sessions. |
+| `backend/migration/postgres.go`                                          | `internal/database/platform/migration_repository.go`                 | PostgreSQL store for migration metadata and run history, not the target connector.                  |
+| `backend/manageddb/*.go`                                                 | `internal/database/target/manageddb/`                                | Runtime target registry, driver allowlist, pool setup, and connection replacement.                  |
+| `backend/migration/target_sql.go`                                        | `internal/database/target/migration/`                                | Target transaction, lock, explain, schema inspection, and dialect behavior.                         |
+| `backend/dialect/{postgres,mysql}/`                                      | `internal/database/target/{postgres,mysql}/`                         | Dialect-specific target catalog implementations.                                                    |
+| `backend/dbops/catalog.go`                                               | `internal/models/catalog/` and the catalog service's reader port     | Separates shared catalog data types from the service-owned reader interface.                        |
+| `backend/dbops/query.go`                                                 | `internal/services/catalog/query_validation.go`                      | Read-only query policy is a business/security rule, not SQL persistence.                            |
+| `backend/migrations/`                                                    | `backend/migrations/`                                                | Platform schema scripts and their embedding runner remain together.                                 |
+| `backend/api/openapi.yaml`                                               | `backend/api/openapi.yaml`                                           | The API contract is kept beside the backend.                                                        |
+| `backend/**/test` and `*_test.go`                                        | Tests beside their migrated feature packages                         | Reusable fakes stay in narrowly scoped test-support packages.                                       |
 
 File names and package boundaries are kept where practical; preserve
 transaction boundaries and existing HTTP behavior when making later changes.
@@ -143,7 +143,7 @@ separate:
 - **Internal/platform database:** the application's PostgreSQL database. It
   stores users, sessions, groups/grants, managed connection metadata and
   encrypted DSNs, and migration definitions/runs. Its SQL schema changes are
-  the numbered files in `backend_v2/migrations/`.
+  the numbered files in `backend/migrations/`.
 - **Target database:** a user-managed PostgreSQL, MySQL, or MariaDB database.
   `internal/database/target` owns runtime pools, schema/catalog readers, and
   migration execution transactions. It must not store platform state.
@@ -154,7 +154,7 @@ or let platform migration scripts be sent to a target database.
 ### Migration runner and embedded SQL
 
 Go's `//go:embed` cannot embed files from a parent directory. If the runner
-must embed the scripts while the scripts remain in `backend_v2/migrations`,
+must embed the scripts while the scripts remain in `backend/migrations`,
 the simplest option is to keep `runner.go` in that directory alongside its
 numbered `.sql` files. The Go file is the runner; the numbered files remain
 the schema scripts. Alternatively, make the runner read an injected `fs.FS`
