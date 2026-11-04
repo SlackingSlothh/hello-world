@@ -83,7 +83,7 @@ func TestAdminEditsConnection(t *testing.T) {
 	}
 	api := authentication.RequireSameOrigin(handler.New(service, catalogapp.Service{}, accessapp.Service{}, handler.NewSecurity(authentication, authorization), nil))
 	_, cookie := support.Create(t, sessions, "admin")
-	request := func(method, path, body, origin string, authenticated bool, status int) {
+	request := func(method, path, body, origin string, authenticated bool, status int) *httptest.ResponseRecorder {
 		t.Helper()
 		req := httptest.NewRequest(method, "https://example.com"+path, strings.NewReader(body))
 		req.Header.Set("Origin", origin)
@@ -99,6 +99,15 @@ func TestAdminEditsConnection(t *testing.T) {
 		if strings.Contains(response.Body.String(), "secret") {
 			t.Fatal("response exposed DSN")
 		}
+		return response
+	}
+	adminConnections := request("GET", "/api/v1/admin/connections", "", "https://example.com", true, 200)
+	if !strings.Contains(adminConnections.Body.String(), `"id":"db1"`) {
+		t.Fatal("admin connection list omitted an ungranted connection")
+	}
+	userConnections := request("GET", "/api/v1/connections", "", "https://example.com", true, 200)
+	if userConnections.Body.String() != "[]\n" {
+		t.Fatalf("user connection list exposed an ungranted connection: %s", userConnections.Body.String())
 	}
 	path := "/api/v1/connections/db1"
 	request("GET", path+"/settings", "", "https://example.com", true, 200)
@@ -147,6 +156,7 @@ func TestAdminEditsConnection(t *testing.T) {
 	request("PATCH", path, `{"name":"No session"}`, "https://example.com", false, 401)
 	request("PATCH", path, `{"name":"Wrong origin"}`, "https://other.example", true, 403)
 	access.admin = false
+	request("GET", "/api/v1/admin/connections", "", "https://example.com", true, 403)
 	request("GET", path+"/settings", "", "https://example.com", true, 403)
 	request("PATCH", path, `{"name":"Not admin"}`, "https://example.com", true, 403)
 }

@@ -42,7 +42,8 @@ Alpine.data('connectionDashboard', (admin = false) => ({
 		this.loading = true;
 		this.error = '';
 		try {
-			const response = await fetch(apiURL('/api/v1/connections'), { credentials: 'include', cache: 'no-store' });
+			const path = this.admin ? '/api/v1/admin/connections' : '/api/v1/connections';
+			const response = await fetch(apiURL(path), { credentials: 'include', cache: 'no-store' });
 			if (response.status === 401) throw new Error('Your session is not valid. Sign in to continue.');
 			if (!response.ok) throw new Error('Could not load connections from the database API.');
 			const items = await response.json();
@@ -56,7 +57,12 @@ Alpine.data('connectionDashboard', (admin = false) => ({
 	async loadStatuses(items) {
 		this.error = '';
 		this.loading = false;
-		this.connections = items.map((item) => ({ ...item, reachable: item.connected ? null : false, checking: item.connected }));
+		this.connections = items.map((item) => ({
+			...item,
+			reachable: this.admin ? item.connected : item.connected ? null : false,
+			checking: !this.admin && item.connected,
+		}));
+		if (this.admin) return;
 		await Promise.all(this.connections.map(async (connection) => {
 			if (!connection.connected) return;
 			try {

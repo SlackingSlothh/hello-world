@@ -52,6 +52,7 @@ func (h *Handler) routes() {
 		return h.security.RequireAdmin(next)
 	}
 	h.mux.Handle("GET /api/v1/connections", user(h.listConnections))
+	h.mux.Handle("GET /api/v1/admin/connections", admin(h.listAdminConnections))
 	h.mux.Handle("POST /api/v1/connections", admin(h.createConnection))
 	h.mux.Handle("GET /api/v1/connections/{id}", connectionUser(authz.ReadSchema, h.getConnection))
 	h.mux.Handle("GET /api/v1/connections/{id}/settings", admin(h.getConnection))
@@ -156,6 +157,11 @@ func (h *Handler) listConnections(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, items)
 }
+
+func (h *Handler) listAdminConnections(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, http.StatusOK, h.connections.List())
+}
+
 func (h *Handler) createConnection(w http.ResponseWriter, r *http.Request) {
 	var request connectionRequest
 	if !decode(w, r, &request) {

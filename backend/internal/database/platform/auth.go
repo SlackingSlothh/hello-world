@@ -16,12 +16,12 @@ import (
 type AuthStore struct{ db *sql.DB }
 
 type SeedAccount struct {
-	ID            string
-	Username      string
-	PasswordHash  string
-	PlatformAdmin bool
-	GroupID       string
-	GroupName     string
+	ID           string
+	Username     string
+	PasswordHash string
+	GroupIsAdmin bool
+	GroupID      string
+	GroupName    string
 }
 
 func NewAuthStore(db *sql.DB) (*AuthStore, error) {
@@ -43,8 +43,8 @@ func (s *AuthStore) SeedAccount(ctx context.Context, seed SeedAccount) error {
 		return fmt.Errorf("begin account seed: %w", err)
 	}
 	defer tx.Rollback()
-	created, err := tx.ExecContext(ctx, `INSERT INTO platform_users(id,username,password_hash,is_platform_admin,active)
-		VALUES($1,$2,$3,$4,TRUE) ON CONFLICT(id) DO NOTHING`, seed.ID, seed.Username, seed.PasswordHash, seed.PlatformAdmin)
+	created, err := tx.ExecContext(ctx, `INSERT INTO platform_users(id,username,password_hash,active)
+		VALUES($1,$2,$3,TRUE) ON CONFLICT(id) DO NOTHING`, seed.ID, seed.Username, seed.PasswordHash)
 	if err != nil {
 		return fmt.Errorf("seed account %s: %w", seed.ID, err)
 	}
@@ -57,7 +57,7 @@ func (s *AuthStore) SeedAccount(ctx context.Context, seed SeedAccount) error {
 	}
 	_, err = tx.ExecContext(ctx, `INSERT INTO access_groups(id,name,is_admin) VALUES($1,$2,$3)
 		ON CONFLICT(id) DO UPDATE SET is_admin=EXCLUDED.is_admin
-		WHERE access_groups.name=EXCLUDED.name`, seed.GroupID, seed.GroupName, seed.PlatformAdmin)
+		WHERE access_groups.name=EXCLUDED.name`, seed.GroupID, seed.GroupName, seed.GroupIsAdmin)
 	if err != nil {
 		return fmt.Errorf("seed account group %s: %w", seed.GroupID, err)
 	}
@@ -85,7 +85,7 @@ func (s *AuthStore) SeedAccount(ctx context.Context, seed SeedAccount) error {
 
 func (s *AuthStore) FindByUsername(ctx context.Context, username string) (users.User, error) {
 	var u users.User
-	err := s.db.QueryRowContext(ctx, `SELECT id,username,password_hash,is_platform_admin,active FROM platform_users WHERE username=$1`, username).Scan(&u.ID, &u.Username, &u.PasswordHash, &u.IsPlatformAdmin, &u.Active)
+	err := s.db.QueryRowContext(ctx, `SELECT id,username,password_hash,active FROM platform_users WHERE username=$1`, username).Scan(&u.ID, &u.Username, &u.PasswordHash, &u.Active)
 	if errors.Is(err, sql.ErrNoRows) {
 		return users.User{}, users.ErrNotFound
 	}

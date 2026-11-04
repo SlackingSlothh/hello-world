@@ -86,7 +86,14 @@ func TestPlatformAdminPermissions(t *testing.T) {
 			}
 		})
 	}
-	if !errors.Is(authz.Authorize(admin, authz.ReadData, "db1"), authz.ErrForbidden) {
-		t.Fatal("admin bypassed database grant")
+	for _, action := range []authz.Action{
+		authz.ReadSchema, authz.ReadData, authz.ReadMigration,
+		authz.CreateMigration, authz.UpdateMigration, authz.ExecuteMigration,
+	} {
+		t.Run(string(action)+" without database grant", func(t *testing.T) {
+			if !errors.Is(authz.Authorize(admin, action, "db1"), authz.ErrForbidden) {
+				t.Fatal("admin accessed database without a group grant")
+			}
+		})
 	}
 }

@@ -123,7 +123,7 @@ func TestAdminAddsUser(t *testing.T) {
 	if err != nil || !hash.Matches("a test password") {
 		t.Fatal("stored password cannot be verified")
 	}
-	if !store.user.Active || store.user.IsPlatformAdmin || store.user.ID == "" {
+	if !store.user.Active || store.user.ID == "" {
 		t.Fatal("incorrect new user defaults")
 	}
 	identity, err := authenticator.Authenticate(context.Background(), "alice", "a test password")
