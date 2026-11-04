@@ -129,8 +129,8 @@ paths:
     get:
       tags: [Connections]
       operationId: listConnections
-      summary: List connections visible to the current user
-      description: Returns only connections for which the user has ReadSchema access. DSNs are omitted.
+      summary: List connections available to the current user
+      description: Returns only connections for which the user has ReadSchema access. For the administrator's configuration list, use GET /api/v1/admin/connections. DSNs are omitted.
       responses:
         "200":
           description: Visible managed connections.
@@ -171,6 +171,29 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /api/v1/admin/connections:
+    get:
+      tags: [Connections]
+      operationId: listAdminConnections
+      summary: List all connections for configuration management
+      description: Admin-only. Returns safe connection configuration metadata for every managed connection, independent of database grants. This permission does not grant catalog, schema, query, data, or migration access. DSNs and credentials are omitted.
+      security:
+        - sessionCookie: []
+      x-required-permission: ManageConnections
+      responses:
+        "200":
+          description: All managed connection configuration metadata.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Connection"
         "401":
           $ref: "#/components/responses/Unauthorized"
         "403":
