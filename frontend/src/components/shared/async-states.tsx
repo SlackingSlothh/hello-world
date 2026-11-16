@@ -33,7 +33,9 @@ export function EmptyState({
     <div className="rounded-lg border border-dashed bg-background px-6 py-10 text-center">
       <h2 className="font-medium">{title}</h2>
       {description ? (
-        <p className="mx-auto mt-2 max-w-lg text-sm text-muted-foreground">{description}</p>
+        <p className="mx-auto mt-2 max-w-lg text-sm text-muted-foreground">
+          {description}
+        </p>
       ) : null}
       {action ? <div className="mt-4">{action}</div> : null}
     </div>
@@ -60,15 +62,25 @@ export function ErrorState({
       role="alert"
     >
       <div className="flex gap-3">
-        <AlertCircle aria-hidden="true" className="mt-0.5 size-5 shrink-0 text-destructive" />
+        <AlertCircle
+          aria-hidden="true"
+          className="mt-0.5 size-5 shrink-0 text-destructive"
+        />
         <div className="min-w-0">
           <h2 className="font-medium">{title}</h2>
           <p className="mt-1 text-sm text-muted-foreground">{message}</p>
           {requestId ? (
-            <p className="mt-2 text-xs text-muted-foreground">Request ID: {requestId}</p>
+            <p className="mt-2 text-xs text-muted-foreground">
+              Request ID: {requestId}
+            </p>
           ) : null}
           {onRetry ? (
-            <Button className="mt-3" onClick={onRetry} size="sm" variant="outline">
+            <Button
+              className="mt-3"
+              onClick={onRetry}
+              size="sm"
+              variant="outline"
+            >
               <RefreshCw aria-hidden="true" />
               {retryLabel}
             </Button>

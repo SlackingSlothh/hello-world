@@ -73,7 +73,10 @@ export function AuthForm({
         </p>
       ) : null}
       {error ? (
-        <div className="rounded-md border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive" role="alert">
+        <div
+          className="rounded-md border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive"
+          role="alert"
+        >
           {error}
           {retryAfter ? ` Try again ${retryAfter}.` : ""}
         </div>
@@ -89,7 +92,11 @@ export function AuthForm({
       {isRegister ? (
         <Field
           autoComplete="email"
-          error={"email" in form.formState.errors ? form.formState.errors.email?.message : undefined}
+          error={
+            "email" in form.formState.errors
+              ? form.formState.errors.email?.message
+              : undefined
+          }
           id="email"
           label="Email"
           registration={form.register("email")}
@@ -120,7 +127,11 @@ export function AuthForm({
       ) : null}
 
       <Button className="w-full" disabled={submitting} type="submit">
-        {submitting ? "Please wait…" : isRegister ? "Create account" : "Sign in"}
+        {submitting
+          ? "Please wait…"
+          : isRegister
+            ? "Create account"
+            : "Sign in"}
       </Button>
     </form>
   );
@@ -139,7 +150,9 @@ function Field({
   type?: string;
   autoComplete?: string;
   error?: string;
-  registration: ReturnType<ReturnType<typeof useForm<AuthFormValues>>["register"]>;
+  registration: ReturnType<
+    ReturnType<typeof useForm<AuthFormValues>>["register"]
+  >;
 }) {
   return (
     <div className="space-y-2">

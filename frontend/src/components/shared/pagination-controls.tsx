@@ -21,7 +21,10 @@ export function PaginationControls({
   const lastItem = Math.min(safePage * pageSize, total);
 
   return (
-    <nav aria-label="Pagination" className="flex flex-wrap items-center justify-between gap-3">
+    <nav
+      aria-label="Pagination"
+      className="flex flex-wrap items-center justify-between gap-3"
+    >
       <p className="text-sm text-muted-foreground">
         Showing {firstItem}–{lastItem} of {total}
       </p>

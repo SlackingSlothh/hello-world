@@ -5,7 +5,10 @@ import type {
   GroupSummary,
   MemberOption,
 } from "@/components/admin/admin-panels";
-import type { DatabaseSummary, SchemaNode } from "@/components/database/database-panels";
+import type {
+  DatabaseSummary,
+  SchemaNode,
+} from "@/components/database/database-panels";
 import type {
   ApprovalProgress,
   DraftSummary,
@@ -115,11 +118,17 @@ class MockConnectionRepository extends MockRepository<ConnectionSummary> {
     ]);
   }
 
-  async testConfiguration(values: ConnectionFormValues): Promise<{ ok: boolean; message: string }> {
-    const ok = Boolean(values.host.trim() && values.database.trim() && values.port > 0);
+  async testConfiguration(
+    values: ConnectionFormValues,
+  ): Promise<{ ok: boolean; message: string }> {
+    const ok = Boolean(
+      values.host.trim() && values.database.trim() && values.port > 0,
+    );
     return {
       ok,
-      message: ok ? "Mock connection test succeeded." : "Host, database, and port are required.",
+      message: ok
+        ? "Mock connection test succeeded."
+        : "Host, database, and port are required.",
     };
   }
 }
@@ -188,9 +197,24 @@ class MockDatabaseRepository extends MockRepository<DatabaseSummary> {
 
   async tableRows(): Promise<MockTableRow[]> {
     return [
-      { id: "1", name: "Riley Chen", email: "riley@example.test", status: "active" },
-      { id: "2", name: "Sam Jordan", email: "sam@example.test", status: "active" },
-      { id: "3", name: "Noah Taylor", email: "noah@example.test", status: "inactive" },
+      {
+        id: "1",
+        name: "Riley Chen",
+        email: "riley@example.test",
+        status: "active",
+      },
+      {
+        id: "2",
+        name: "Sam Jordan",
+        email: "sam@example.test",
+        status: "active",
+      },
+      {
+        id: "3",
+        name: "Noah Taylor",
+        email: "noah@example.test",
+        status: "inactive",
+      },
     ];
   }
 
@@ -257,8 +281,18 @@ class MockMigrationRepository extends MockRepository<MigrationRecord> {
 
   async drafts(): Promise<DraftSummary[]> {
     return [
-      { id: "draft-001", name: "Add customer status", status: "valid", mode: "single" },
-      { id: "draft-002", name: "Backfill customer region", status: "stale", mode: "batch" },
+      {
+        id: "draft-001",
+        name: "Add customer status",
+        status: "valid",
+        mode: "single",
+      },
+      {
+        id: "draft-002",
+        name: "Backfill customer region",
+        status: "stale",
+        mode: "batch",
+      },
     ];
   }
 

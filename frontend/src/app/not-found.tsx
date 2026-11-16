@@ -6,8 +6,12 @@ export default function NotFoundPage() {
   return (
     <PublicLayout>
       <section className="mx-auto max-w-xl py-16 text-center">
-        <p className="text-sm font-semibold uppercase tracking-widest text-primary">404</p>
-        <h1 className="mt-3 text-3xl font-semibold tracking-tight">Page not found</h1>
+        <p className="text-sm font-semibold uppercase tracking-widest text-primary">
+          404
+        </p>
+        <h1 className="mt-3 text-3xl font-semibold tracking-tight">
+          Page not found
+        </h1>
         <p className="mt-3 text-sm text-muted-foreground">
           The page or database you requested could not be found.
         </p>

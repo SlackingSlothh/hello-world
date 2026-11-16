@@ -7,7 +7,10 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { DataTable, type DataTableColumn } from "@/components/shared/data-table";
+import {
+  DataTable,
+  type DataTableColumn,
+} from "@/components/shared/data-table";
 import { ErrorState } from "@/components/shared/async-states";
 import { PaginationControls } from "@/components/shared/pagination-controls";
 import { StatusBadge } from "@/components/shared/status-badge";
@@ -38,7 +41,10 @@ export function MigrationHistory({
     hideRollbacks
       ? records
           .filter((record) => record.type === "rollback")
-          .flatMap((record) => [record.id, ...(record.cancelsMigrationId ? [record.cancelsMigrationId] : [])])
+          .flatMap((record) => [
+            record.id,
+            ...(record.cancelsMigrationId ? [record.cancelsMigrationId] : []),
+          ])
       : [],
   );
   const visibleRecords = records.filter((record) => !hiddenIds.has(record.id));
@@ -46,7 +52,11 @@ export function MigrationHistory({
     { id: "sequence", header: "#", cell: (item) => item.sequence },
     { id: "name", header: "Migration", cell: (item) => item.name },
     { id: "type", header: "Type", cell: (item) => item.type },
-    { id: "status", header: "Status", cell: (item) => <StatusBadge status={item.status} /> },
+    {
+      id: "status",
+      header: "Status",
+      cell: (item) => <StatusBadge status={item.status} />,
+    },
     {
       id: "reversible",
       header: "Rollback",
@@ -61,7 +71,8 @@ export function MigrationHistory({
     {
       id: "duration",
       header: "Duration",
-      cell: (item) => (item.durationMs === undefined ? "—" : `${item.durationMs} ms`),
+      cell: (item) =>
+        item.durationMs === undefined ? "—" : `${item.durationMs} ms`,
     },
   ];
 
@@ -126,7 +137,11 @@ export function DraftList({
   const columns: DataTableColumn<DraftSummary>[] = [
     { id: "name", header: "Draft", cell: (draft) => draft.name },
     { id: "mode", header: "Mode", cell: (draft) => draft.mode },
-    { id: "status", header: "Validation", cell: (draft) => <StatusBadge status={draft.status} /> },
+    {
+      id: "status",
+      header: "Validation",
+      cell: (draft) => <StatusBadge status={draft.status} />,
+    },
     {
       id: "actions",
       header: "Actions",
@@ -139,7 +154,11 @@ export function DraftList({
             </Button>
           ) : null}
           {canEdit && onValidate ? (
-            <Button onClick={() => onValidate(draft)} size="sm" variant="outline">
+            <Button
+              onClick={() => onValidate(draft)}
+              size="sm"
+              variant="outline"
+            >
               Validate
             </Button>
           ) : null}
@@ -155,7 +174,11 @@ export function DraftList({
             </Button>
           ) : null}
           {onDuplicate ? (
-            <Button onClick={() => onDuplicate(draft)} size="sm" variant="outline">
+            <Button
+              onClick={() => onDuplicate(draft)}
+              size="sm"
+              variant="outline"
+            >
               <Copy aria-hidden="true" />
               Duplicate
             </Button>
@@ -174,7 +197,9 @@ export function DraftList({
       ),
     },
   ];
-  return <DataTable columns={columns} getRowId={(draft) => draft.id} rows={drafts} />;
+  return (
+    <DataTable columns={columns} getRowId={(draft) => draft.id} rows={drafts} />
+  );
 }
 
 export function DraftEditor({
@@ -199,8 +224,10 @@ export function DraftEditor({
     cursorColumn: "",
     ...initialValue,
   });
-  const update = <K extends keyof typeof value>(key: K, next: (typeof value)[K]) =>
-    setValue((current) => ({ ...current, [key]: next }));
+  const update = <K extends keyof typeof value>(
+    key: K,
+    next: (typeof value)[K],
+  ) => setValue((current) => ({ ...current, [key]: next }));
 
   return (
     <form
@@ -210,8 +237,17 @@ export function DraftEditor({
         void onSave(value);
       }}
     >
-      <Field label="Name" value={value.name} onChange={(next) => update("name", next)} required />
-      <Field label="Description" value={value.description} onChange={(next) => update("description", next)} />
+      <Field
+        label="Name"
+        value={value.name}
+        onChange={(next) => update("name", next)}
+        required
+      />
+      <Field
+        label="Description"
+        value={value.description}
+        onChange={(next) => update("description", next)}
+      />
       <label className="block space-y-2 text-sm font-medium">
         Up SQL
         <Textarea
@@ -243,7 +279,9 @@ export function DraftEditor({
         Execution mode
         <select
           className="h-9 w-full rounded-md border bg-background px-3 text-sm"
-          onChange={(event) => update("mode", event.target.value as "single" | "batch")}
+          onChange={(event) =>
+            update("mode", event.target.value as "single" | "batch")
+          }
           value={value.mode}
         >
           <option value="single">Single transaction</option>
@@ -252,8 +290,17 @@ export function DraftEditor({
       </label>
       {value.mode === "batch" ? (
         <div className="grid gap-4 sm:grid-cols-2">
-          <NumberField label="Batch size" value={value.batchSize} onChange={(next) => update("batchSize", next)} />
-          <Field label="Cursor column" value={value.cursorColumn} onChange={(next) => update("cursorColumn", next)} required />
+          <NumberField
+            label="Batch size"
+            value={value.batchSize}
+            onChange={(next) => update("batchSize", next)}
+          />
+          <Field
+            label="Cursor column"
+            value={value.cursorColumn}
+            onChange={(next) => update("cursorColumn", next)}
+            required
+          />
         </div>
       ) : null}
       <Button disabled={busy} type="submit">
@@ -287,8 +334,16 @@ export function RequestList({
 }) {
   const columns: DataTableColumn<RequestSummary>[] = [
     { id: "type", header: "Request", cell: (request) => request.type },
-    { id: "status", header: "Status", cell: (request) => <StatusBadge status={request.status} /> },
-    { id: "requester", header: "Requested by", cell: (request) => request.requester },
+    {
+      id: "status",
+      header: "Status",
+      cell: (request) => <StatusBadge status={request.status} />,
+    },
+    {
+      id: "requester",
+      header: "Requested by",
+      cell: (request) => request.requester,
+    },
     {
       id: "created",
       header: "Created",
@@ -305,7 +360,13 @@ export function RequestList({
         ) : null,
     },
   ];
-  return <DataTable columns={columns} getRowId={(request) => request.id} rows={requests} />;
+  return (
+    <DataTable
+      columns={columns}
+      getRowId={(request) => request.id}
+      rows={requests}
+    />
+  );
 }
 
 export function RequestReview({
@@ -336,11 +397,16 @@ export function RequestReview({
         <h2 className="font-semibold">Approval progress</h2>
         <ul className="mt-2 space-y-2">
           {approvals.map((approval) => (
-            <li className="flex flex-wrap items-center justify-between gap-2 rounded-md border p-3 text-sm" key={approval.groupId}>
+            <li
+              className="flex flex-wrap items-center justify-between gap-2 rounded-md border p-3 text-sm"
+              key={approval.groupId}
+            >
               <span>
                 {approval.groupName} · {approval.leaderName}
               </span>
-              <StatusBadge status={approval.approved ? "approved" : "pending"} />
+              <StatusBadge
+                status={approval.approved ? "approved" : "pending"}
+              />
             </li>
           ))}
         </ul>
@@ -422,7 +488,8 @@ export function JobProgress({
     };
 
     const poll = async () => {
-      if (disposed || stopped.current || document.hidden || inFlight.current) return;
+      if (disposed || stopped.current || document.hidden || inFlight.current)
+        return;
       inFlight.current = true;
       try {
         const nextJob = await fetchJob(initialJob.id);
@@ -438,7 +505,11 @@ export function JobProgress({
         schedule(2000);
       } catch (cause) {
         if (disposed) return;
-        setError(cause instanceof Error ? cause.message : "Unable to refresh job status.");
+        setError(
+          cause instanceof Error
+            ? cause.message
+            : "Unable to refresh job status.",
+        );
         failures.current += 1;
         schedule(Math.min(2000 * 2 ** failures.current, 10000));
       } finally {
@@ -461,7 +532,10 @@ export function JobProgress({
   }, [fetchJob, initialJob.id, initialJob.status]);
 
   return (
-    <section aria-live="polite" className="space-y-4 rounded-lg border bg-background p-4">
+    <section
+      aria-live="polite"
+      className="space-y-4 rounded-lg border bg-background p-4"
+    >
       <header className="flex flex-wrap items-center justify-between gap-2">
         <div>
           <h2 className="font-semibold">Job {job.id}</h2>
@@ -493,7 +567,11 @@ export function JobProgress({
                 setError(undefined);
               })
               .catch((cause: unknown) =>
-                setError(cause instanceof Error ? cause.message : "Unable to refresh job status."),
+                setError(
+                  cause instanceof Error
+                    ? cause.message
+                    : "Unable to refresh job status.",
+                ),
               );
           }}
           retryLabel="Refresh now"
@@ -525,15 +603,27 @@ export function JobList({
       header: "Job",
       cell: (job) =>
         onSelect ? (
-          <button className="font-mono text-primary underline" onClick={() => onSelect(job)} type="button">
+          <button
+            className="font-mono text-primary underline"
+            onClick={() => onSelect(job)}
+            type="button"
+          >
             {job.id}
           </button>
         ) : (
           <span className="font-mono">{job.id}</span>
         ),
     },
-    { id: "status", header: "Status", cell: (job) => <StatusBadge status={job.status} /> },
-    { id: "batches", header: "Batches", cell: (job) => job.batchesCommitted ?? "—" },
+    {
+      id: "status",
+      header: "Status",
+      cell: (job) => <StatusBadge status={job.status} />,
+    },
+    {
+      id: "batches",
+      header: "Batches",
+      cell: (job) => job.batchesCommitted ?? "—",
+    },
     { id: "rows", header: "Rows", cell: (job) => job.rowsCommitted ?? "—" },
   ];
   return (
@@ -549,11 +639,17 @@ export function JobList({
   );
 }
 
-function JobMetric({ label, children }: { label: string; children: ReactNode }) {
+function JobMetric({
+  label,
+  children,
+}: {
+  label: string;
+  children: ReactNode;
+}) {
   return (
     <div className="rounded-md bg-muted/50 p-3">
       <dt className="text-xs text-muted-foreground">{label}</dt>
-      <dd className="mt-1 break-words font-medium">{children}</dd>
+      <dd className="mt-1 wrap-break-word font-medium">{children}</dd>
     </div>
   );
 }
@@ -572,7 +668,11 @@ function Field({
   return (
     <label className="block space-y-2 text-sm font-medium">
       {label}
-      <Input onChange={(event) => onChange(event.target.value)} required={required} value={value} />
+      <Input
+        onChange={(event) => onChange(event.target.value)}
+        required={required}
+        value={value}
+      />
     </label>
   );
 }

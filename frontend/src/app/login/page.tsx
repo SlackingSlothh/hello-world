@@ -11,7 +11,9 @@ type LoginPageProps = {
 export default function LoginPage(props: LoginPageProps) {
   return (
     <PublicLayout>
-      <Suspense fallback={<LoadingState label="Loading sign-in form" rows={2} />}>
+      <Suspense
+        fallback={<LoadingState label="Loading sign-in form" rows={2} />}
+      >
         <LoginPageContent {...props} />
       </Suspense>
     </PublicLayout>
@@ -28,7 +30,10 @@ async function LoginPageContent({ searchParams }: LoginPageProps) {
         sessionExpired={params.error === "SESSION_EXPIRED"}
       />
       <p className="text-center text-sm text-muted-foreground">
-        New here? <Link className="text-primary underline" href="/register">Create an account</Link>
+        New here?{" "}
+        <Link className="text-primary underline" href="/register">
+          Create an account
+        </Link>
       </p>
     </div>
   );

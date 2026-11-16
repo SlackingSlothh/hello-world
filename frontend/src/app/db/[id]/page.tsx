@@ -14,7 +14,9 @@ type DatabasePageProps = {
 
 export default function DatabaseDetailPage(props: DatabasePageProps) {
   return (
-    <Suspense fallback={<LoadingState label="Loading database workspace" rows={5} />}>
+    <Suspense
+      fallback={<LoadingState label="Loading database workspace" rows={5} />}
+    >
       <DatabaseDetailContent {...props} />
     </Suspense>
   );
@@ -36,7 +38,17 @@ async function DatabaseDetailContent({
     requestedTab === "migration" && database.engine !== "postgres"
       ? "schema"
       : requestedTab;
-  const [schemas, tableRows, queryRows, history, drafts, requests, approvals, jobs, preview] = await Promise.all([
+  const [
+    schemas,
+    tableRows,
+    queryRows,
+    history,
+    drafts,
+    requests,
+    approvals,
+    jobs,
+    preview,
+  ] = await Promise.all([
     mockDatabases.schemas(database.id),
     mockDatabases.tableRows(),
     mockDatabases.queryRows(),
@@ -48,7 +60,8 @@ async function DatabaseDetailContent({
     mockMigrations.reviewPreview(),
   ]);
   const initialJob = jobs[0];
-  if (!initialJob) throw new Error("Mock migration data must include an initial job.");
+  if (!initialJob)
+    throw new Error("Mock migration data must include an initial job.");
 
   return (
     <DatabaseWorkspace

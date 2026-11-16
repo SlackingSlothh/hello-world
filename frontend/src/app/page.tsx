@@ -1,14 +1,27 @@
 import Link from "next/link";
-import { ArrowRight, Database, History, ShieldCheck, Workflow } from "lucide-react";
+import {
+  ArrowRight,
+  Database,
+  History,
+  ShieldCheck,
+  Workflow,
+} from "lucide-react";
 import { cacheLife } from "next/cache";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
 import { PublicLayout } from "@/components/shared/layouts";
 import { PageHeader } from "@/components/shared/page-header";
 
 const features = [
   {
     title: "Browse databases",
-    description: "Explore schemas, tables, columns, constraints, and paginated data.",
+    description:
+      "Explore schemas, tables, columns, constraints, and paginated data.",
     icon: Database,
   },
   {
@@ -18,7 +31,8 @@ const features = [
   },
   {
     title: "Migration workflow",
-    description: "Draft changes, request approvals, and monitor asynchronous jobs.",
+    description:
+      "Draft changes, request approvals, and monitor asynchronous jobs.",
     icon: Workflow,
   },
   {

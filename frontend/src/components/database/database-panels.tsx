@@ -3,13 +3,22 @@
 import Link from "next/link";
 import type { ReactNode } from "react";
 import { useState } from "react";
-import { ChevronDown, ChevronRight, Database, Play, Square } from "lucide-react";
+import {
+  ChevronDown,
+  ChevronRight,
+  Database,
+  Play,
+  Square,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Textarea } from "@/components/ui/textarea";
 import { AccessBadge, StatusBadge } from "@/components/shared/status-badge";
 import { EmptyState } from "@/components/shared/async-states";
-import { DataTable, type DataTableColumn } from "@/components/shared/data-table";
+import {
+  DataTable,
+  type DataTableColumn,
+} from "@/components/shared/data-table";
 import { PaginationControls } from "@/components/shared/pagination-controls";
 
 export type DatabaseSummary = {
@@ -32,7 +41,9 @@ export function DatabaseCard({ database }: { database: DatabaseSummary }) {
           </span>
           <div>
             <CardTitle>{database.name}</CardTitle>
-            <p className="mt-1 text-sm capitalize text-muted-foreground">{database.engine}</p>
+            <p className="mt-1 text-sm capitalize text-muted-foreground">
+              {database.engine}
+            </p>
           </div>
         </div>
         <StatusBadge status={database.status} />
@@ -41,7 +52,9 @@ export function DatabaseCard({ database }: { database: DatabaseSummary }) {
         <div className="flex flex-wrap items-center gap-2">
           <AccessBadge level={database.access} />
           {database.migrationRunning ? <StatusBadge status="running" /> : null}
-          {database.awaitingReview ? <StatusBadge status="pending approval" /> : null}
+          {database.awaitingReview ? (
+            <StatusBadge status="pending approval" />
+          ) : null}
         </div>
         <Link
           className="inline-flex h-8 items-center justify-center rounded-md bg-primary px-3 text-sm font-medium text-primary-foreground hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
@@ -91,7 +104,9 @@ export function DatabaseWorkspaceShell({
   const tabs: Array<{ id: WorkspaceTab; label: string }> = [
     { id: "schema", label: "Schema" },
     { id: "query", label: "Query" },
-    ...(database.engine === "postgres" ? [{ id: "migration" as const, label: "Migration" }] : []),
+    ...(database.engine === "postgres"
+      ? [{ id: "migration" as const, label: "Migration" }]
+      : []),
   ];
 
   return (
@@ -99,12 +114,19 @@ export function DatabaseWorkspaceShell({
       <header className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <p className="text-sm text-muted-foreground">Database workspace</p>
-          <h1 className="mt-1 text-2xl font-semibold tracking-tight">{database.name}</h1>
-          <p className="mt-1 text-sm capitalize text-muted-foreground">{database.engine}</p>
+          <h1 className="mt-1 text-2xl font-semibold tracking-tight">
+            {database.name}
+          </h1>
+          <p className="mt-1 text-sm capitalize text-muted-foreground">
+            {database.engine}
+          </p>
         </div>
         <StatusBadge status={database.status} />
       </header>
-      <nav aria-label="Database sections" className="flex flex-wrap gap-2 border-b">
+      <nav
+        aria-label="Database sections"
+        className="flex flex-wrap gap-2 border-b"
+      >
         {tabs.map((tab) => (
           <Link
             aria-current={activeTab === tab.id ? "page" : undefined}
@@ -144,7 +166,9 @@ export function SchemaTree({
   onSelect: (schema: string, table: string) => void;
   singleLevel?: boolean;
 }) {
-  const [expanded, setExpanded] = useState<string[]>(selectedSchema ? [selectedSchema] : []);
+  const [expanded, setExpanded] = useState<string[]>(
+    selectedSchema ? [selectedSchema] : [],
+  );
   if (schemas.length === 0) {
     return <EmptyState title="No schemas found" />;
   }
@@ -158,7 +182,10 @@ export function SchemaTree({
   }
 
   return (
-    <nav aria-label="Database schemas" className="rounded-lg border bg-background p-2">
+    <nav
+      aria-label="Database schemas"
+      className="rounded-lg border bg-background p-2"
+    >
       <ul className="space-y-1">
         {schemas.map((schema) => {
           const isExpanded = expanded.includes(schema.name);
@@ -185,7 +212,8 @@ export function SchemaTree({
                     <li key={table}>
                       <button
                         aria-current={
-                          selectedSchema === schema.name && selectedTable === table
+                          selectedSchema === schema.name &&
+                          selectedTable === table
                             ? "page"
                             : undefined
                         }
@@ -198,7 +226,9 @@ export function SchemaTree({
                     </li>
                   ))}
                   {schema.tables.length === 0 ? (
-                    <li className="px-2 py-2 text-xs text-muted-foreground">No tables</li>
+                    <li className="px-2 py-2 text-xs text-muted-foreground">
+                      No tables
+                    </li>
                   ) : null}
                 </ul>
               ) : null}
@@ -229,7 +259,11 @@ export function TableDetailsTabs({
   ];
   return (
     <section className="space-y-4">
-      <div aria-label="Table details" className="flex flex-wrap gap-1 border-b" role="tablist">
+      <div
+        aria-label="Table details"
+        className="flex flex-wrap gap-1 border-b"
+        role="tablist"
+      >
         {tabs.map((tab) => (
           <button
             aria-selected={activeTab === tab.id}
@@ -321,7 +355,10 @@ export function SqlEditor({
 }) {
   return (
     <section className="space-y-3">
-      <label className="block space-y-2 text-sm font-medium" htmlFor="sql-query">
+      <label
+        className="block space-y-2 text-sm font-medium"
+        htmlFor="sql-query"
+      >
         Read-only SQL query
         <Textarea
           aria-describedby="sql-query-hint"
@@ -369,8 +406,12 @@ export function QueryResults<T>({
   return (
     <section aria-live="polite" className="space-y-3">
       <div className="flex flex-wrap items-center justify-between gap-2 text-sm text-muted-foreground">
-        <span>{rows.length} rows returned{truncated ? " (results truncated)" : ""}</span>
-        {elapsedMs !== undefined ? <span>Completed in {elapsedMs} ms</span> : null}
+        <span>
+          {rows.length} rows returned{truncated ? " (results truncated)" : ""}
+        </span>
+        {elapsedMs !== undefined ? (
+          <span>Completed in {elapsedMs} ms</span>
+        ) : null}
       </div>
       <DataTable
         caption="Read-only query results"

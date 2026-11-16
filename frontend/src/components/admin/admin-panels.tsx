@@ -6,7 +6,10 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { DataTable, type DataTableColumn } from "@/components/shared/data-table";
+import {
+  DataTable,
+  type DataTableColumn,
+} from "@/components/shared/data-table";
 import { EmptyState } from "@/components/shared/async-states";
 import { AccessBadge, StatusBadge } from "@/components/shared/status-badge";
 
@@ -36,7 +39,8 @@ export function ConnectionCard({
         <div>
           <CardTitle>{connection.name}</CardTitle>
           <p className="mt-1 text-sm text-muted-foreground">
-            {connection.engine} · {connection.host}:{connection.port}/{connection.database}
+            {connection.engine} · {connection.host}:{connection.port}/
+            {connection.database}
           </p>
         </div>
         <StatusBadge status={connection.status} />
@@ -73,7 +77,11 @@ export function ConnectionList({
       header: "Host / database",
       cell: (item) => `${item.host}:${item.port} / ${item.database}`,
     },
-    { id: "status", header: "Status", cell: (item) => <StatusBadge status={item.status} /> },
+    {
+      id: "status",
+      header: "Status",
+      cell: (item) => <StatusBadge status={item.status} />,
+    },
     {
       id: "pool",
       header: "Pool",
@@ -92,7 +100,11 @@ export function ConnectionList({
           ) : null}
           {item.status === "connected" ? (
             onDisconnect ? (
-              <Button onClick={() => onDisconnect(item)} size="sm" variant="outline">
+              <Button
+                onClick={() => onDisconnect(item)}
+                size="sm"
+                variant="outline"
+              >
                 Disconnect
               </Button>
             ) : null
@@ -180,7 +192,10 @@ export function ConnectionForm({
     setValues((current) => ({ ...current, [key]: value }));
   }
 
-  function submit(event: FormEvent<HTMLFormElement>, callback: typeof onSubmit) {
+  function submit(
+    event: FormEvent<HTMLFormElement>,
+    callback: typeof onSubmit,
+  ) {
     event.preventDefault();
     void callback(values);
   }
@@ -188,13 +203,21 @@ export function ConnectionForm({
   return (
     <form className="space-y-5" onSubmit={(event) => submit(event, onSubmit)}>
       <div className="grid gap-4 sm:grid-cols-2">
-        <TextField label="Name" value={values.name} onChange={(value) => update("name", value)} required />
+        <TextField
+          label="Name"
+          value={values.name}
+          onChange={(value) => update("name", value)}
+          required
+        />
         <label className="space-y-2 text-sm font-medium">
           Engine
           <select
             className="h-9 w-full rounded-md border bg-background px-3 text-sm"
             onChange={(event) =>
-              update("engine", event.target.value as ConnectionSummary["engine"])
+              update(
+                "engine",
+                event.target.value as ConnectionSummary["engine"],
+              )
             }
             value={values.engine}
           >
@@ -203,27 +226,73 @@ export function ConnectionForm({
             <option value="mariadb">MariaDB</option>
           </select>
         </label>
-        <TextField label="Host" value={values.host} onChange={(value) => update("host", value)} required />
-        <NumberField label="Port" value={values.port} onChange={(value) => update("port", value)} />
-        <TextField label="Database" value={values.database} onChange={(value) => update("database", value)} required />
-        <TextField label="Username" value={values.username} onChange={(value) => update("username", value)} required />
+        <TextField
+          label="Host"
+          value={values.host}
+          onChange={(value) => update("host", value)}
+          required
+        />
+        <NumberField
+          label="Port"
+          value={values.port}
+          onChange={(value) => update("port", value)}
+        />
+        <TextField
+          label="Database"
+          value={values.database}
+          onChange={(value) => update("database", value)}
+          required
+        />
+        <TextField
+          label="Username"
+          value={values.username}
+          onChange={(value) => update("username", value)}
+          required
+        />
         <TextField
           autoComplete="new-password"
-          label={editing ? "Password (leave blank to keep current)" : "Password"}
+          label={
+            editing ? "Password (leave blank to keep current)" : "Password"
+          }
           type="password"
           value={values.password}
           onChange={(value) => update("password", value)}
           required={!editing}
         />
-        <TextField label="SSL mode" value={values.sslMode} onChange={(value) => update("sslMode", value)} />
-        <NumberField label="Max open connections" value={values.maxOpenConnections} onChange={(value) => update("maxOpenConnections", value)} />
-        <NumberField label="Max idle connections" value={values.maxIdleConnections} onChange={(value) => update("maxIdleConnections", value)} />
-        <NumberField label="Connection timeout (seconds)" value={values.connectionTimeoutSeconds} onChange={(value) => update("connectionTimeoutSeconds", value)} />
-        <NumberField label="Statement timeout (seconds)" value={values.statementTimeoutSeconds} onChange={(value) => update("statementTimeoutSeconds", value)} />
+        <TextField
+          label="SSL mode"
+          value={values.sslMode}
+          onChange={(value) => update("sslMode", value)}
+        />
+        <NumberField
+          label="Max open connections"
+          value={values.maxOpenConnections}
+          onChange={(value) => update("maxOpenConnections", value)}
+        />
+        <NumberField
+          label="Max idle connections"
+          value={values.maxIdleConnections}
+          onChange={(value) => update("maxIdleConnections", value)}
+        />
+        <NumberField
+          label="Connection timeout (seconds)"
+          value={values.connectionTimeoutSeconds}
+          onChange={(value) => update("connectionTimeoutSeconds", value)}
+        />
+        <NumberField
+          label="Statement timeout (seconds)"
+          value={values.statementTimeoutSeconds}
+          onChange={(value) => update("statementTimeoutSeconds", value)}
+        />
       </div>
       <div className="flex flex-wrap justify-end gap-2">
         {onTest ? (
-          <Button disabled={busy} onClick={() => void onTest(values)} type="button" variant="outline">
+          <Button
+            disabled={busy}
+            onClick={() => void onTest(values)}
+            type="button"
+            variant="outline"
+          >
             Test connection
           </Button>
         ) : null}
@@ -283,7 +352,9 @@ export function GroupList({
       ),
     },
   ];
-  return <DataTable columns={columns} getRowId={(group) => group.id} rows={groups} />;
+  return (
+    <DataTable columns={columns} getRowId={(group) => group.id} rows={groups} />
+  );
 }
 
 export type MemberOption = { id: string; label: string };
@@ -316,7 +387,10 @@ export function MemberPicker({
     <fieldset className="space-y-3">
       <legend className="text-sm font-medium">{label}</legend>
       <div className="relative">
-        <Search aria-hidden="true" className="absolute left-3 top-2.5 size-4 text-muted-foreground" />
+        <Search
+          aria-hidden="true"
+          className="absolute left-3 top-2.5 size-4 text-muted-foreground"
+        />
         <Input
           aria-label="Search users"
           className="pl-9"
@@ -339,7 +413,9 @@ export function MemberPicker({
           </li>
         ))}
         {filtered.length === 0 ? (
-          <li className="px-2 py-3 text-sm text-muted-foreground">No matching users.</li>
+          <li className="px-2 py-3 text-sm text-muted-foreground">
+            No matching users.
+          </li>
         ) : null}
       </ul>
     </fieldset>
@@ -367,7 +443,9 @@ export function GroupEditor({
   onLeaderChange: (id: string) => void;
   onSubmit: () => void;
 }) {
-  const selectedMembers = members.filter((member) => selectedMemberIds.includes(member.id));
+  const selectedMembers = members.filter((member) =>
+    selectedMemberIds.includes(member.id),
+  );
   return (
     <form
       className="space-y-5"
@@ -437,12 +515,18 @@ export function AccessGrantMatrix({
   groups: Array<{ id: string; name: string }>;
   connections: Array<{ id: string; name: string }>;
   grants: AccessGrant[];
-  onChange: (groupId: string, connectionId: string, level: AccessGrant["level"]) => void;
+  onChange: (
+    groupId: string,
+    connectionId: string,
+    level: AccessGrant["level"],
+  ) => void;
   disabled?: boolean;
 }) {
   const levelFor = (groupId: string, connectionId: string) =>
-    grants.find((grant) => grant.groupId === groupId && grant.connectionId === connectionId)?.level ??
-    "";
+    grants.find(
+      (grant) =>
+        grant.groupId === groupId && grant.connectionId === connectionId,
+    )?.level ?? "";
 
   if (groups.length === 0 || connections.length === 0) {
     return (
@@ -455,7 +539,7 @@ export function AccessGrantMatrix({
 
   return (
     <div className="w-full overflow-x-auto rounded-lg border bg-background">
-      <table className="w-full min-w-[640px] text-sm">
+      <table className="w-full min-w-160 text-sm">
         <thead>
           <tr className="border-b bg-muted/50">
             <th className="p-3 text-left font-medium">Group</th>
@@ -474,7 +558,10 @@ export function AccessGrantMatrix({
                 const level = levelFor(group.id, connection.id);
                 return (
                   <td className="p-3" key={connection.id}>
-                    <label className="sr-only" htmlFor={`grant-${group.id}-${connection.id}`}>
+                    <label
+                      className="sr-only"
+                      htmlFor={`grant-${group.id}-${connection.id}`}
+                    >
                       {group.name} access to {connection.name}
                     </label>
                     <select
@@ -521,7 +608,11 @@ export function AdminModeSwitcher({
 }) {
   const nextMode = mode === "admin" ? "user" : "admin";
   return (
-    <Button disabled={busy} onClick={() => onSwitch(nextMode)} variant="outline">
+    <Button
+      disabled={busy}
+      onClick={() => onSwitch(nextMode)}
+      variant="outline"
+    >
       <ArrowRightLeft aria-hidden="true" />
       {busy ? "Switching…" : `Switch to ${nextMode} mode`}
     </Button>

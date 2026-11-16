@@ -8,7 +8,10 @@ export default function RegisterPage() {
       <div className="space-y-4 py-8">
         <AuthPageForm mode="register" />
         <p className="text-center text-sm text-muted-foreground">
-          Already registered? <Link className="text-primary underline" href="/login">Sign in</Link>
+          Already registered?{" "}
+          <Link className="text-primary underline" href="/login">
+            Sign in
+          </Link>
         </p>
       </div>
     </PublicLayout>

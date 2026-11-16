@@ -5,7 +5,13 @@ import { useRouter } from "next/navigation";
 import { useCallback, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
 import {
   AccessGrantMatrix,
   AdminModeSwitcher,
@@ -121,18 +127,27 @@ export function AdminHome({ isAdmin }: { isAdmin: boolean }) {
       />
       <ul className="grid gap-4 md:grid-cols-3">
         {[
-          ["Connections", "Configure managed database connections.", "/admin/connections"],
+          [
+            "Connections",
+            "Configure managed database connections.",
+            "/admin/connections",
+          ],
           ["Groups", "Manage group members and leaders.", "/admin/groups"],
           ["Access", "Grant groups view or edit access.", "/admin/access"],
         ].map(([title, description, href]) => (
           <li key={href}>
-            <Link className="block h-full rounded-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" href={href}>
+            <Link
+              className="block h-full rounded-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              href={href}
+            >
               <Card className="h-full transition-colors hover:bg-muted/40">
                 <CardHeader>
                   <CardTitle>{title}</CardTitle>
                   <CardDescription>{description}</CardDescription>
                 </CardHeader>
-                <CardContent className="text-sm font-medium text-primary">Open {title.toLowerCase()} →</CardContent>
+                <CardContent className="text-sm font-medium text-primary">
+                  Open {title.toLowerCase()} →
+                </CardContent>
               </Card>
             </Link>
           </li>
@@ -174,24 +189,30 @@ export function ConnectionManagement({
         idleConnections: editing?.idleConnections ?? 0,
       };
       return editing
-        ? current.map((item) => item.id === editing.id ? record : item)
+        ? current.map((item) => (item.id === editing.id ? record : item))
         : [...current, record];
     });
     setBusy(false);
     setFormOpen(false);
     setEditing(undefined);
-    toast.success(editing ? "Mock connection updated." : "Mock connection saved.");
+    toast.success(
+      editing ? "Mock connection updated." : "Mock connection saved.",
+    );
   }
 
   function updateStatus(connection: ConnectionSummary, status: string) {
     setConnections((items) =>
-      items.map((item) => (item.id === connection.id ? { ...item, status } : item)),
+      items.map((item) =>
+        item.id === connection.id ? { ...item, status } : item,
+      ),
     );
     toast.success(`Mock connection ${status}.`);
   }
 
   function removeConnection(connection: ConnectionSummary) {
-    setConnections((items) => items.filter((item) => item.id !== connection.id));
+    setConnections((items) =>
+      items.filter((item) => item.id !== connection.id),
+    );
     setDeleting(undefined);
     toast.success("Mock connection removed.");
   }
@@ -222,10 +243,12 @@ export function ConnectionManagement({
     <div className="space-y-5">
       <PageHeader
         actions={
-          <Button onClick={() => {
-            setEditing(undefined);
-            setFormOpen((open) => !open);
-          }}>
+          <Button
+            onClick={() => {
+              setEditing(undefined);
+              setFormOpen((open) => !open);
+            }}
+          >
             {formOpen ? "Close form" : "Add connection"}
           </Button>
         }
@@ -235,7 +258,9 @@ export function ConnectionManagement({
       {formOpen ? (
         <Card>
           <CardHeader>
-            <CardTitle>{editing ? `Edit ${editing.name}` : "New connection"}</CardTitle>
+            <CardTitle>
+              {editing ? `Edit ${editing.name}` : "New connection"}
+            </CardTitle>
           </CardHeader>
           <CardContent>
             <ConnectionForm
@@ -297,7 +322,7 @@ export function GroupManagement({
         memberIds,
       };
       return editingGroup
-        ? current.map((group) => group.id === editingGroup.id ? saved : group)
+        ? current.map((group) => (group.id === editingGroup.id ? saved : group))
         : [...current, saved];
     });
     setName("");
@@ -312,7 +337,9 @@ export function GroupManagement({
     setEditingGroup(group);
     setName(group?.name ?? "");
     setMemberIds(group?.memberIds ?? []);
-    setLeaderId(members.find((member) => member.label === group?.leaderName)?.id ?? "");
+    setLeaderId(
+      members.find((member) => member.label === group?.leaderName)?.id ?? "",
+    );
     setEditorOpen(true);
   }
 
@@ -320,7 +347,9 @@ export function GroupManagement({
     <div className="space-y-5">
       <PageHeader
         actions={
-          <Button onClick={() => editorOpen ? setEditorOpen(false) : openEditor()}>
+          <Button
+            onClick={() => (editorOpen ? setEditorOpen(false) : openEditor())}
+          >
             {editorOpen ? "Close form" : "Create group"}
           </Button>
         }
@@ -330,8 +359,12 @@ export function GroupManagement({
       {editorOpen ? (
         <Card>
           <CardHeader>
-            <CardTitle>{editingGroup ? `Edit ${editingGroup.name}` : "New group"}</CardTitle>
-            <CardDescription>The Administrators system group cannot be deleted.</CardDescription>
+            <CardTitle>
+              {editingGroup ? `Edit ${editingGroup.name}` : "New group"}
+            </CardTitle>
+            <CardDescription>
+              The Administrators system group cannot be deleted.
+            </CardDescription>
           </CardHeader>
           <CardContent>
             <GroupEditor
@@ -353,7 +386,9 @@ export function GroupManagement({
       <GroupList
         groups={groups}
         onDelete={(group) => {
-          setGroups((current) => current.filter((item) => item.id !== group.id));
+          setGroups((current) =>
+            current.filter((item) => item.id !== group.id),
+          );
           toast.success("Mock group removed.");
         }}
         onEdit={openEditor}
@@ -372,10 +407,15 @@ export function AccessManagement({
   initialGrants: AccessGrant[];
 }) {
   const [grants, setGrants] = useState(initialGrants);
-  function changeGrant(groupId: string, connectionId: string, level: AccessGrant["level"]) {
+  function changeGrant(
+    groupId: string,
+    connectionId: string,
+    level: AccessGrant["level"],
+  ) {
     setGrants((current) => {
       const existing = current.find(
-        (grant) => grant.groupId === groupId && grant.connectionId === connectionId,
+        (grant) =>
+          grant.groupId === groupId && grant.connectionId === connectionId,
       );
       if (!level) return current.filter((grant) => grant.id !== existing?.id);
       if (existing) {
@@ -434,7 +474,9 @@ export function DatabaseWorkspace({
 }) {
   return (
     <DatabaseWorkspaceShell activeTab={activeTab} database={database}>
-      {activeTab === "schema" ? <SchemaWorkspace rows={tableRows} schemas={schemas} /> : null}
+      {activeTab === "schema" ? (
+        <SchemaWorkspace rows={tableRows} schemas={schemas} />
+      ) : null}
       {activeTab === "query" ? <QueryWorkspace rows={queryRows} /> : null}
       {activeTab === "migration" ? (
         database.engine === "postgres" ? (
@@ -454,15 +496,32 @@ export function DatabaseWorkspace({
   );
 }
 
-function SchemaWorkspace({ schemas, rows }: { schemas: SchemaNode[]; rows: MockTableRow[] }) {
-  const [selection, setSelection] = useState<{ schema: string; table: string }>();
+function SchemaWorkspace({
+  schemas,
+  rows,
+}: {
+  schemas: SchemaNode[];
+  rows: MockTableRow[];
+}) {
+  const [selection, setSelection] = useState<{
+    schema: string;
+    table: string;
+  }>();
   const [tab, setTab] = useState<TableDetailTab>("data");
   const columns = useMemo(
     () => [
       { id: "id", header: "ID", cell: (row: { id: string }) => row.id },
       { id: "name", header: "Name", cell: (row: { name: string }) => row.name },
-      { id: "email", header: "Email", cell: (row: { email: string }) => row.email },
-      { id: "status", header: "Status", cell: (row: { status: string }) => row.status },
+      {
+        id: "email",
+        header: "Email",
+        cell: (row: { email: string }) => row.email,
+      },
+      {
+        id: "status",
+        header: "Status",
+        cell: (row: { status: string }) => row.status,
+      },
     ],
     [],
   );
@@ -479,7 +538,9 @@ function SchemaWorkspace({ schemas, rows }: { schemas: SchemaNode[]; rows: MockT
         <section className="min-w-0 space-y-4">
           <div>
             <h2 className="text-lg font-semibold">{selection.table}</h2>
-            <p className="text-sm text-muted-foreground">Schema: {selection.schema}</p>
+            <p className="text-sm text-muted-foreground">
+              Schema: {selection.schema}
+            </p>
           </div>
           <TableDetailsTabs activeTab={tab} onTabChange={setTab}>
             {tab === "data" ? (
@@ -510,29 +571,47 @@ function SchemaWorkspace({ schemas, rows }: { schemas: SchemaNode[]; rows: MockT
 
 function DataDetails({ tab }: { tab: TableDetailTab }) {
   const details = {
-    columns: ["id · uuid · primary key", "name · text · not null", "email · text · unique"],
-    constraints: ["customers_pkey · PRIMARY KEY (id)", "customers_email_key · UNIQUE (email)"],
-    indices: ["customers_pkey · btree (id)", "customers_email_key · btree (email)"],
+    columns: [
+      "id · uuid · primary key",
+      "name · text · not null",
+      "email · text · unique",
+    ],
+    constraints: [
+      "customers_pkey · PRIMARY KEY (id)",
+      "customers_email_key · UNIQUE (email)",
+    ],
+    indices: [
+      "customers_pkey · btree (id)",
+      "customers_email_key · btree (email)",
+    ],
     data: [],
   }[tab];
   return (
     <ul className="divide-y rounded-lg border bg-background">
       {details.map((item) => (
-        <li className="p-3 text-sm" key={item}>{item}</li>
+        <li className="p-3 text-sm" key={item}>
+          {item}
+        </li>
       ))}
     </ul>
   );
 }
 
 function QueryWorkspace({ rows }: { rows: MockQueryRow[] }) {
-  const [sql, setSql] = useState("SELECT id, name, email, status FROM customers LIMIT 100;");
+  const [sql, setSql] = useState(
+    "SELECT id, name, email, status FROM customers LIMIT 100;",
+  );
   const [hasRun, setHasRun] = useState(false);
   const [running, setRunning] = useState(false);
   const columns = useMemo(
     () => [
       { id: "id", header: "ID", cell: (row: { id: number }) => row.id },
       { id: "name", header: "Name", cell: (row: { name: string }) => row.name },
-      { id: "status", header: "Status", cell: (row: { status: string }) => row.status },
+      {
+        id: "status",
+        header: "Status",
+        cell: (row: { status: string }) => row.status,
+      },
     ],
     [],
   );
@@ -587,17 +666,20 @@ function MigrationWorkspace({
   const [drafts, setDrafts] = useState(initialDrafts);
   const [hideRollbacks, setHideRollbacks] = useState(false);
   const pollCount = useRef(0);
-  const fetchJob = useCallback(async (jobId: string) => {
-    await new Promise((resolve) => setTimeout(resolve, 250));
-    pollCount.current += 1;
-    return {
-      ...initialJob,
-      id: jobId,
-      status: pollCount.current > 1 ? "succeeded" : "running",
-      batchesCommitted: pollCount.current > 1 ? 10 : 5,
-      rowsCommitted: pollCount.current > 1 ? 10000 : 5000,
-    };
-  }, [initialJob]);
+  const fetchJob = useCallback(
+    async (jobId: string) => {
+      await new Promise((resolve) => setTimeout(resolve, 250));
+      pollCount.current += 1;
+      return {
+        ...initialJob,
+        id: jobId,
+        status: pollCount.current > 1 ? "succeeded" : "running",
+        batchesCommitted: pollCount.current > 1 ? 10 : 5,
+        rowsCommitted: pollCount.current > 1 ? 10000 : 5000,
+      };
+    },
+    [initialJob],
+  );
 
   return (
     <div className="space-y-8">
@@ -615,7 +697,9 @@ function MigrationWorkspace({
       <section className="space-y-4">
         <PageHeader
           actions={
-            <Button onClick={() => toast.info("Mock draft form is ready below.")}>
+            <Button
+              onClick={() => toast.info("Mock draft form is ready below.")}
+            >
               New draft
             </Button>
           }
@@ -654,29 +738,45 @@ function MigrationWorkspace({
           canEdit
           drafts={drafts}
           onDelete={(draft) => {
-            setDrafts((current) => current.filter((item) => item.id !== draft.id));
+            setDrafts((current) =>
+              current.filter((item) => item.id !== draft.id),
+            );
             toast.success("Mock draft deleted.");
           }}
           onDuplicate={(draft) => {
             setDrafts((current) => [
               ...current,
-              { ...draft, id: `draft-${Date.now()}`, name: `${draft.name} copy`, status: "invalid" },
+              {
+                ...draft,
+                id: `draft-${Date.now()}`,
+                name: `${draft.name} copy`,
+                status: "invalid",
+              },
             ]);
             toast.success("Mock draft duplicated.");
           }}
           onEdit={(draft) => toast.info(`Mock editing ${draft.name}.`)}
           onRebase={(draft) => {
             setDrafts((current) =>
-              current.map((item) => item.id === draft.id ? { ...item, status: "valid" } : item),
+              current.map((item) =>
+                item.id === draft.id ? { ...item, status: "valid" } : item,
+              ),
             );
             toast.success("Mock draft rebased.");
           }}
-          onRequest={(draft) => toast.success(`Mock request submitted for ${draft.name}.`)}
-          onValidate={(draft) => toast.success(`${draft.name} passed mock validation.`)}
+          onRequest={(draft) =>
+            toast.success(`Mock request submitted for ${draft.name}.`)
+          }
+          onValidate={(draft) =>
+            toast.success(`${draft.name} passed mock validation.`)
+          }
         />
       </section>
       <section className="space-y-4">
-        <PageHeader description="Approval status for pending changes." title="Requests" />
+        <PageHeader
+          description="Approval status for pending changes."
+          title="Requests"
+        />
         <RequestList
           onSelect={(request) => toast.info(`Reviewing ${request.id}.`)}
           requests={requests}
@@ -684,12 +784,17 @@ function MigrationWorkspace({
         <RequestReview
           approvals={approvals}
           onApprove={() => toast.success("Mock approval recorded.")}
-          onReject={(comment) => toast.success(`Mock rejection recorded: ${comment}`)}
+          onReject={(comment) =>
+            toast.success(`Mock rejection recorded: ${comment}`)
+          }
           sqlPreview={preview}
         />
       </section>
       <section className="space-y-4">
-        <PageHeader description="Progress for background migration jobs." title="Jobs" />
+        <PageHeader
+          description="Progress for background migration jobs."
+          title="Jobs"
+        />
         <JobList
           jobs={[initialJob]}
           onPageChange={() => undefined}

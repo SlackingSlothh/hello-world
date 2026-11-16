@@ -1,6 +1,9 @@
 import { Badge } from "@/components/ui/badge";
 
-const statusVariants: Record<string, "default" | "secondary" | "destructive" | "outline"> = {
+const statusVariants: Record<
+  string,
+  "default" | "secondary" | "destructive" | "outline"
+> = {
   active: "default",
   connected: "default",
   succeeded: "default",
@@ -39,7 +42,9 @@ export function StatusBadge({ status }: { status: string }) {
 }
 
 export function AccessBadge({ level }: { level: "view" | "view_edit" }) {
-  return <Badge variant={level === "view_edit" ? "default" : "secondary"}>
-    {level === "view_edit" ? "View + Edit" : "View"}
-  </Badge>;
+  return (
+    <Badge variant={level === "view_edit" ? "default" : "secondary"}>
+      {level === "view_edit" ? "View + Edit" : "View"}
+    </Badge>
+  );
 }
