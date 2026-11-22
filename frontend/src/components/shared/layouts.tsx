@@ -77,6 +77,7 @@ export function AuthenticatedLayout({
       navigation={
         <>
           <NavLink href="/db">Databases</NavLink>
+          <NavLink href="/migration">Migrations</NavLink>
           {isAdmin ? <NavLink href="/admin">Administration</NavLink> : null}
         </>
       }
@@ -103,6 +104,7 @@ export function AdminLayout({
           <NavLink href="/admin/groups">Groups</NavLink>
           <NavLink href="/admin/access">Access</NavLink>
           <NavLink href="/db">User mode</NavLink>
+          <NavLink href="/migration">Migrations</NavLink>
         </>
       }
     >

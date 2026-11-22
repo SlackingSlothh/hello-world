@@ -90,7 +90,7 @@ export function DatabaseList({
   );
 }
 
-export type WorkspaceTab = "schema" | "query" | "migration";
+export type WorkspaceTab = "schema" | "query";
 
 export function DatabaseWorkspaceShell({
   database,
@@ -104,9 +104,6 @@ export function DatabaseWorkspaceShell({
   const tabs: Array<{ id: WorkspaceTab; label: string }> = [
     { id: "schema", label: "Schema" },
     { id: "query", label: "Query" },
-    ...(database.engine === "postgres"
-      ? [{ id: "migration" as const, label: "Migration" }]
-      : []),
   ];
 
   return (

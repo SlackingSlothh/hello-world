@@ -55,6 +55,7 @@ import {
 import { EmptyState } from "@/components/shared/async-states";
 import { ConfirmDialog } from "@/components/shared/confirm-dialog";
 import { PageHeader } from "@/components/shared/page-header";
+import { databaseRouteKey } from "@/lib/database-routing";
 import type { MockQueryRow, MockTableRow } from "@/lib/mock-data";
 
 export function AuthPageForm({
@@ -451,26 +452,14 @@ export function DatabaseWorkspace({
   database,
   schemas,
   activeTab,
-  history,
-  drafts,
-  requests,
-  approvals,
-  initialJob,
   tableRows,
   queryRows,
-  preview,
 }: {
   database: DatabaseSummary;
   schemas: SchemaNode[];
   activeTab: WorkspaceTab;
-  history: MigrationRecord[];
-  drafts: DraftSummary[];
-  requests: RequestSummary[];
-  approvals: ApprovalProgress[];
-  initialJob: JobSummary;
   tableRows: MockTableRow[];
   queryRows: MockQueryRow[];
-  preview: string;
 }) {
   return (
     <DatabaseWorkspaceShell activeTab={activeTab} database={database}>
@@ -478,21 +467,95 @@ export function DatabaseWorkspace({
         <SchemaWorkspace rows={tableRows} schemas={schemas} />
       ) : null}
       {activeTab === "query" ? <QueryWorkspace rows={queryRows} /> : null}
-      {activeTab === "migration" ? (
-        database.engine === "postgres" ? (
-          <MigrationWorkspace
-            approvals={approvals}
-            drafts={drafts}
-            history={history}
-            initialJob={initialJob}
-            preview={preview}
-            requests={requests}
-          />
-        ) : (
-          <EmptyState title="Migrations are unavailable for this database engine." />
-        )
-      ) : null}
     </DatabaseWorkspaceShell>
+  );
+}
+
+export function MigrationDatabaseList({
+  databases,
+}: {
+  databases: DatabaseSummary[];
+}) {
+  if (databases.length === 0) {
+    return (
+      <EmptyState
+        description="Migration access is available for PostgreSQL databases where your group grants view + edit access."
+        title="No databases available for migration"
+      />
+    );
+  }
+  return (
+    <ul className="grid gap-4 md:grid-cols-2">
+      {databases.map((database) => (
+        <li key={database.id}>
+          <Card>
+            <CardHeader className="flex-row items-start justify-between gap-3">
+              <div>
+                <CardTitle>{database.name}</CardTitle>
+                <CardDescription className="mt-1">
+                  PostgreSQL · {database.status}
+                </CardDescription>
+              </div>
+              <span className="rounded-full bg-primary/10 px-2.5 py-1 text-xs font-medium text-primary">
+                View + Edit
+              </span>
+            </CardHeader>
+            <CardContent className="flex items-center justify-between gap-3">
+              <div className="flex flex-wrap gap-2 text-sm text-muted-foreground">
+                {database.migrationRunning ? <span>Migration running</span> : null}
+                {database.awaitingReview ? <span>Request awaiting review</span> : null}
+              </div>
+              <Link
+                className="inline-flex h-8 shrink-0 items-center justify-center rounded-md bg-primary px-3 text-sm font-medium text-primary-foreground hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                href={`/migration/${databaseRouteKey(database.name)}`}
+              >
+                Open migrations
+              </Link>
+            </CardContent>
+          </Card>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+export function MigrationDatabaseWorkspace({
+  database,
+  history,
+  drafts,
+  requests,
+  approvals,
+  initialJob,
+  preview,
+}: {
+  database: DatabaseSummary;
+  history: MigrationRecord[];
+  drafts: DraftSummary[];
+  requests: RequestSummary[];
+  approvals: ApprovalProgress[];
+  initialJob: JobSummary;
+  preview: string;
+}) {
+  return (
+    <div className="space-y-5">
+      <PageHeader
+        breadcrumbs={[
+          { label: "Migrations", href: "/migration" },
+          { label: database.name },
+        ]}
+        description="Manage migration history, drafts, reviews, and execution jobs."
+        title={`Migrations · ${database.name}`}
+      />
+      <MigrationWorkspace
+        approvals={approvals}
+        databaseName={database.name}
+        drafts={drafts}
+        history={history}
+        initialJob={initialJob}
+        preview={preview}
+        requests={requests}
+      />
+    </div>
   );
 }
 
@@ -655,6 +718,7 @@ function MigrationWorkspace({
   approvals,
   initialJob,
   preview,
+  databaseName,
 }: {
   history: MigrationRecord[];
   drafts: DraftSummary[];
@@ -662,6 +726,7 @@ function MigrationWorkspace({
   approvals: ApprovalProgress[];
   initialJob: JobSummary;
   preview: string;
+  databaseName?: string;
 }) {
   const [drafts, setDrafts] = useState(initialDrafts);
   const [hideRollbacks, setHideRollbacks] = useState(false);
@@ -683,6 +748,11 @@ function MigrationWorkspace({
 
   return (
     <div className="space-y-8">
+      {databaseName ? (
+        <p className="text-sm text-muted-foreground">
+          Managing migrations for <span className="font-medium text-foreground">{databaseName}</span>
+        </p>
+      ) : null}
       <section className="space-y-4">
         <PageHeader
           description="Applied changes and rollback availability."

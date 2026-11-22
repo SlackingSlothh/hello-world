@@ -15,6 +15,16 @@ import { ErrorState } from "@/components/shared/async-states";
 import { PaginationControls } from "@/components/shared/pagination-controls";
 import { StatusBadge } from "@/components/shared/status-badge";
 
+const dateTimeFormatter = new Intl.DateTimeFormat("en-US", {
+  dateStyle: "medium",
+  timeStyle: "short",
+  timeZone: "UTC",
+});
+
+function formatDateTime(value: string) {
+  return dateTimeFormatter.format(new Date(value));
+}
+
 export type MigrationRecord = {
   id: string;
   sequence: number;
@@ -66,7 +76,7 @@ export function MigrationHistory({
     {
       id: "executed",
       header: "Executed at",
-      cell: (item) => new Date(item.executedAt).toLocaleString(),
+      cell: (item) => formatDateTime(item.executedAt),
     },
     {
       id: "duration",
@@ -347,7 +357,7 @@ export function RequestList({
     {
       id: "created",
       header: "Created",
-      cell: (request) => new Date(request.createdAt).toLocaleString(),
+      cell: (request) => formatDateTime(request.createdAt),
     },
     {
       id: "detail",
@@ -541,7 +551,7 @@ export function JobProgress({
           <h2 className="font-semibold">Job {job.id}</h2>
           {job.startedAt ? (
             <p className="text-sm text-muted-foreground">
-              Started {new Date(job.startedAt).toLocaleString()}
+              Started {formatDateTime(job.startedAt)}
             </p>
           ) : null}
         </div>

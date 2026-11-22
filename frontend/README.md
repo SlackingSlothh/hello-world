@@ -20,14 +20,18 @@ Never cache a response containing user or session data in a shared cache.
 | `/admin/groups`       | SSR admin guard and shell                                                   | CSR group list, member picker, leader selection, and group mutations                             | Frequently changing data and mutations                                 |
 | `/admin/access`       | SSR admin guard and shell                                                   | CSR access matrix and grant/revoke actions                                                       | Access changes must take effect promptly                               |
 | `/db`                 | SSR session guard and initial accessible-database list                      | CSR revalidation and status/review indicators                                                    | Fast first paint for private, per-user data                            |
-| `/db/{id}`            | SSR session guard and database shell; conceal unauthorized IDs as not found | CSR schema, query, and migration tabs; paginate large results                                    | Large, interactive datasets and workflows                              |
+| `/db/{id}`            | SSR session guard and database shell; conceal unauthorized IDs as not found | CSR schema and query tabs; paginate large results                                                | Database browsing and read-only queries                                |
+| `/migration`          | SSR session guard and editable-database list                                 | CSR status/review indicators                                                                     | Only show databases where the user has view + edit access               |
+| `/migration/{db_name}`| SSR session/permission guard and migration shell                             | CSR history, drafts, requests, reviews, and jobs                                                  | Separate migration workflow; PostgreSQL only                            |
 | Not found / forbidden | Static shell where possible; use SSR when the response depends on a guard   | Client navigation uses the same app shell                                                        | Keep error pages simple and avoid leaking protected resource existence |
 
-`/db/{id}` tab selection may use a query parameter or hash, as specified.
-Internal links use Next.js client-side navigation; direct loads and refreshes
-must still render the route and run its server guard. The Migration tab is
-available only for PostgreSQL connections. Keep permission checks authoritative
-on the backend; client-side visibility is only a UX aid.
+`/db/{id}` tab selection may use a query parameter or hash for Schema and
+Query. Migration workflows live at `/migration` and
+`/migration/{db_name}`, not in the database browser. The migration list only
+includes PostgreSQL databases with `view_edit` access. Internal links use
+Next.js client-side navigation; direct loads and refreshes must still render the
+route and run its server guard. Keep permission checks authoritative on the
+backend; client-side visibility is only a UX aid.
 
 ### Next.js implementation notes
 
@@ -64,7 +68,9 @@ browser-only state.
 | `GroupList`, `GroupEditor`, `MemberPicker`     | CSR island in admin SSR shell       | Group membership, exactly-one-leader selection, and group lifecycle actions                                       |
 | `AccessGrantMatrix`                            | CSR island in admin SSR shell       | Grant, change, and revoke group access with impact warnings                                                       |
 | `DatabaseList` / `DatabaseCard`                | SSR initial data + CSR revalidation | Accessible database list, access level, connection state, and review/job indicators                               |
-| `DatabaseWorkspaceShell`, `DatabaseTabs`       | SSR shell + CSR navigation          | Database title, tabs, active selection, and engine-aware tab availability                                         |
+| `DatabaseWorkspaceShell`, `DatabaseTabs`       | SSR shell + CSR navigation          | Database title and Schema / Query navigation                                                                      |
+| `MigrationDatabaseList`                        | SSR initial data + CSR revalidation | Databases where the user can create and request migrations                                                        |
+| `MigrationDatabaseWorkspace`                   | SSR shell + CSR workflows           | Per-database history, drafts, requests, reviews, and jobs                                                         |
 | `SchemaTree`                                   | CSR island                          | Schema/table navigation, including the single-level MySQL/MariaDB case                                            |
 | `TableDetailsTabs`, `TableDataGrid`            | CSR island                          | Columns, constraints, indices, and paginated/sortable table data                                                  |
 | `SqlEditor`, `QueryResults`                    | CSR island                          | Read-only query execution, cancellation, row limits, execution time, and inline errors                            |
@@ -99,10 +105,11 @@ responsibility of the server route/layout, not these display components.
 ## Pages and mock services
 
 The App Router pages are implemented in `src/app/` for the landing page,
-login/register, admin home/connections/groups/access, the database list, and
-database workspaces. The public landing content uses Next.js Cache Components
-with a one-hour revalidation lifetime. Protected route layouts call the mock
-session service so the routes can be explored before the Go API is connected.
+login/register, admin home/connections/groups/access, database browsing, and
+the separate migration list and per-database workspace. The public landing
+content uses Next.js Cache Components with a one-hour revalidation lifetime.
+Protected route layouts call the mock session service so the routes can be
+explored before the Go API is connected.
 
 `src/lib/mock-data.ts` supplies typed in-memory data. Its generic
 `MockRepository<T>` base class is extended by connection, group, database,
@@ -127,7 +134,9 @@ guard in production.
 | `/admin/groups`       | `AdminLayout`, `GroupList`, `GroupEditor`, `MemberPicker`                                                                 |
 | `/admin/access`       | `AdminLayout`, `AccessGrantMatrix`                                                                                        |
 | `/db`                 | `AuthenticatedLayout`, `DatabaseList`, `DatabaseCard`                                                                     |
-| `/db/{id}`            | `AuthenticatedLayout`, `DatabaseWorkspaceShell`, `DatabaseTabs`, then the selected schema, query, or migration components |
+| `/db/{id}`            | `AuthenticatedLayout`, `DatabaseWorkspaceShell`, Schema and Query components                                             |
+| `/migration`          | `AuthenticatedLayout`, editable PostgreSQL `MigrationDatabaseList`                                                       |
+| `/migration/{db_name}`| `AuthenticatedLayout`, `MigrationDatabaseWorkspace`                                                                       |
 
 This is a fresh Next.js implementation plan, not a migration contract for the
 Astro source tree. Follow the spec routes: user search belongs in the

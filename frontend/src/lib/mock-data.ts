@@ -16,6 +16,7 @@ import type {
   MigrationRecord,
   RequestSummary,
 } from "@/components/migration/migration-panels";
+import { databaseRouteKey } from "@/lib/database-routing";
 
 export type DemoUser = {
   id: string;
@@ -193,6 +194,21 @@ class MockDatabaseRepository extends MockRepository<DatabaseSummary> {
       { name: "public", tables: ["customers", "orders", "products"] },
       { name: "audit", tables: ["events"] },
     ];
+  }
+
+  async findByName(name: string): Promise<DatabaseSummary | undefined> {
+    const databases = await this.list();
+    const routeName = databaseRouteKey(name);
+    return databases.find(
+      (database) => databaseRouteKey(database.name) === routeName,
+    );
+  }
+
+  async listEditableForMigrations(): Promise<DatabaseSummary[]> {
+    const databases = await this.list();
+    return databases.filter(
+      (database) => database.engine === "postgres" && database.access === "view_edit",
+    );
   }
 
   async tableRows(): Promise<MockTableRow[]> {
