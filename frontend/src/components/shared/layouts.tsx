@@ -1,5 +1,6 @@
 import Link from "next/link";
 import type { ReactNode } from "react";
+import { ModeSwitchControl } from "@/components/shared/mode-switch-control";
 
 type LayoutProps = {
   children: ReactNode;
@@ -70,15 +71,19 @@ export function AuthenticatedLayout({
   return (
     <Shell
       identity={
-        userName ? (
-          <span className="text-sm text-muted-foreground">{userName}</span>
-        ) : undefined
+        <div className="flex flex-wrap items-center gap-2">
+          {isAdmin ? (
+            <ModeSwitchControl mode="user" />
+          ) : null}
+          {userName ? (
+            <span className="text-sm text-muted-foreground">{userName}</span>
+          ) : undefined}
+        </div>
       }
       navigation={
         <>
           <NavLink href="/db">Databases</NavLink>
           <NavLink href="/migration">Migrations</NavLink>
-          {isAdmin ? <NavLink href="/admin">Administration</NavLink> : null}
         </>
       }
     >
@@ -94,16 +99,18 @@ export function AdminLayout({
   return (
     <Shell
       identity={
-        userName ? (
-          <span className="text-sm text-muted-foreground">{userName}</span>
-        ) : undefined
+        <div className="flex flex-wrap items-center gap-2">
+          <ModeSwitchControl mode="admin" />
+          {userName ? (
+            <span className="text-sm text-muted-foreground">{userName}</span>
+          ) : null}
+        </div>
       }
       navigation={
         <>
           <NavLink href="/admin/connections">Connections</NavLink>
           <NavLink href="/admin/groups">Groups</NavLink>
           <NavLink href="/admin/access">Access</NavLink>
-          <NavLink href="/db">User mode</NavLink>
           <NavLink href="/migration">Migrations</NavLink>
         </>
       }

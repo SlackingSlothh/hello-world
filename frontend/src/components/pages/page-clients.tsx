@@ -14,7 +14,6 @@ import {
 } from "@/components/ui/card";
 import {
   AccessGrantMatrix,
-  AdminModeSwitcher,
   ConnectionForm,
   ConnectionList,
   GroupEditor,
@@ -106,23 +105,10 @@ function safeReturnPath(path?: string) {
   return "/db";
 }
 
-export function AdminHome({ isAdmin }: { isAdmin: boolean }) {
-  const router = useRouter();
-  const [mode, setMode] = useState<"user" | "admin">("admin");
+export function AdminHome() {
   return (
     <div>
       <PageHeader
-        actions={
-          isAdmin ? (
-            <AdminModeSwitcher
-              mode={mode}
-              onSwitch={(nextMode) => {
-                setMode(nextMode);
-                router.push(nextMode === "admin" ? "/admin" : "/db");
-              }}
-            />
-          ) : undefined
-        }
         description="Manage database connections, groups, and access grants."
         title="Admin"
       />

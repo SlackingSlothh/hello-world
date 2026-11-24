@@ -6,6 +6,7 @@ export * from "./shared/async-states";
 export * from "./shared/confirm-dialog";
 export * from "./shared/data-table";
 export * from "./shared/layouts";
+export * from "./shared/mode-switch-control";
 export * from "./shared/page-header";
 export * from "./shared/pagination-controls";
 export * from "./shared/status-badge";
