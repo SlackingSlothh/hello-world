@@ -92,6 +92,15 @@ func (s *AuthStore) FindByUsername(ctx context.Context, username string) (users.
 	return u, err
 }
 
+func (s *AuthStore) FindByID(ctx context.Context, id string) (users.User, error) {
+	var u users.User
+	err := s.db.QueryRowContext(ctx, `SELECT id,username,active FROM platform_users WHERE id=$1`, id).Scan(&u.ID, &u.Username, &u.Active)
+	if errors.Is(err, sql.ErrNoRows) {
+		return users.User{}, users.ErrNotFound
+	}
+	return u, err
+}
+
 func (s *AuthStore) LoadAccess(ctx context.Context, userID string) (authz.UserAccess, error) {
 	var access authz.UserAccess
 	err := s.db.QueryRowContext(ctx, `SELECT id,active FROM platform_users WHERE id=$1`, userID).Scan(&access.UserID, &access.Active)

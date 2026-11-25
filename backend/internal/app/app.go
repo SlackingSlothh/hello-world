@@ -72,7 +72,7 @@ func Run() error {
 		return errors.New("could not restore saved database connections")
 	}
 
-	application, err := server.New(appConfig, server.Dependencies{Users: authStore, Sessions: sessionStore, Access: authStore})
+	application, err := server.New(appConfig, server.Dependencies{Users: authStore, Profiles: authStore, Sessions: sessionStore, Access: authStore})
 	if err != nil {
 		_ = registry.Close()
 		return err

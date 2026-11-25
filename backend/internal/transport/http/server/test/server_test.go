@@ -24,6 +24,13 @@ func (reader userReader) FindByUsername(ctx context.Context, username string) (u
 	return reader.user, nil
 }
 
+func (reader userReader) FindByID(_ context.Context, id string) (users.User, error) {
+	if id != reader.user.ID {
+		return users.User{}, users.ErrNotFound
+	}
+	return reader.user, nil
+}
+
 type accessReader struct{}
 
 func (accessReader) LoadAccess(ctx context.Context, id string) (authz.UserAccess, error) {
@@ -62,6 +69,7 @@ func TestServerRejectsIncompleteDependenciesAndConfiguration(t *testing.T) {
 		dependencies server.Dependencies
 	}{
 		{"onlyUsers", server.Dependencies{Users: userReader{}}},
+		{"missingProfiles", server.Dependencies{Users: userReader{}, Sessions: support.NewStore(), Access: accessReader{}}},
 		{"missingSessions", server.Dependencies{Users: userReader{}, Access: accessReader{}}},
 		{"missingAccess", server.Dependencies{Users: userReader{}, Sessions: support.NewStore()}},
 	}
@@ -72,7 +80,7 @@ func TestServerRejectsIncompleteDependenciesAndConfiguration(t *testing.T) {
 			}
 		})
 	}
-	dependencies := server.Dependencies{Users: userReader{}, Sessions: support.NewStore(), Access: accessReader{}}
+	dependencies := server.Dependencies{Users: userReader{}, Profiles: userReader{}, Sessions: support.NewStore(), Access: accessReader{}}
 	for name, change := range map[string]func(*config.Config){
 		"missing key":                func(c *config.Config) { c.SessionEncryptionKey = nil },
 		"missing origin":             func(c *config.Config) { c.PublicOrigin = "" },
@@ -99,7 +107,7 @@ func TestIntegrationServerRoutesAndMiddlewareOrder(t *testing.T) {
 		t.Fatal(err)
 	}
 	app, err := server.New(config.Config{Address: ":8080", PublicOrigin: "https://app.example", SessionEncryptionKey: make([]byte, 32)}, server.Dependencies{
-		Users: userReader{user: users.User{ID: "u1", Username: "luis", Active: true, PasswordHash: encoded}}, Sessions: support.NewStore(), Access: accessReader{},
+		Users: userReader{user: users.User{ID: "u1", Username: "luis", Active: true, PasswordHash: encoded}}, Profiles: userReader{user: users.User{ID: "u1", Username: "luis", Active: true}}, Sessions: support.NewStore(), Access: accessReader{},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -136,6 +144,11 @@ func TestIntegrationServerRoutesAndMiddlewareOrder(t *testing.T) {
 		t.Fatal("missing session cookie")
 	}
 	cookie := cookies[0]
+	profile := call("GET", "/auth/session", "", "", cookie, http.StatusOK)
+	if !strings.Contains(profile.Body.String(), `"username":"luis"`) {
+		t.Fatal("session response did not contain the authenticated username")
+	}
+	call("GET", "/auth/admin-session", "", "", cookie, http.StatusNoContent)
 	call("POST", "/users", "", "https://evil.example", cookie, 403)
 	call("POST", "/users", "", "https://app.example", cookie, 204)
 	call("GET", "/databases/db1/data", "", "", cookie, 403)

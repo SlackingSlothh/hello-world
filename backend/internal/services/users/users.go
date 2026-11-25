@@ -17,3 +17,7 @@ type User struct {
 type Reader interface {
 	FindByUsername(context.Context, string) (User, error)
 }
+
+type ProfileReader interface {
+	FindByID(context.Context, string) (User, error)
+}

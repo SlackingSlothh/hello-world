@@ -1,6 +1,7 @@
 package server
 
 import (
+	"encoding/json"
 	"errors"
 	"net/http"
 	"time"
@@ -15,6 +16,7 @@ import (
 
 type Dependencies struct {
 	Users    users.Reader
+	Profiles users.ProfileReader
 	Sessions session.Store
 	Access   authz.AccessReader
 }
@@ -37,7 +39,7 @@ func New(config config.Config, dependencies Dependencies) (*Application, error) 
 			IdleTimeout:       60 * time.Second,
 		},
 	}
-	if dependencies.Users == nil && dependencies.Sessions == nil && dependencies.Access == nil {
+	if dependencies.Users == nil && dependencies.Profiles == nil && dependencies.Sessions == nil && dependencies.Access == nil {
 		unavailable := http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 			writer.Header().Set("Cache-Control", "no-store")
 			http.Error(writer, "authentication unavailable", http.StatusServiceUnavailable)
@@ -48,8 +50,8 @@ func New(config config.Config, dependencies Dependencies) (*Application, error) 
 		mux.Handle("GET /auth/admin-session", unavailable)
 		return application, nil
 	}
-	if dependencies.Users == nil || dependencies.Sessions == nil || dependencies.Access == nil {
-		return nil, errors.New("server requires user, session, and access adapters together")
+	if dependencies.Users == nil || dependencies.Profiles == nil || dependencies.Sessions == nil || dependencies.Access == nil {
+		return nil, errors.New("server requires user, profile, session, and access adapters together")
 	}
 	cipher, err := session.NewIdentifierCipher(config.SessionEncryptionKey)
 	if err != nil {
@@ -75,13 +77,35 @@ func New(config config.Config, dependencies Dependencies) (*Application, error) 
 	if err != nil {
 		return nil, err
 	}
-	sessionStatus := http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+	sessionStatus := http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Cache-Control", "no-store")
+		identity, ok := httpapi.IdentityFromContext(request.Context())
+		if !ok {
+			http.Error(writer, "authentication required", http.StatusUnauthorized)
+			return
+		}
+		user, err := dependencies.Profiles.FindByID(request.Context(), identity.UserID)
+		if errors.Is(err, users.ErrNotFound) || (err == nil && (!user.Active || user.ID != identity.UserID)) {
+			http.Error(writer, "authentication required", http.StatusUnauthorized)
+			return
+		}
+		if err != nil || user.Username == "" {
+			http.Error(writer, "authentication unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		writer.Header().Set("Content-Type", "application/json; charset=utf-8")
+		writer.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(writer).Encode(struct {
+			Username string `json:"username"`
+		}{Username: user.Username})
+	})
+	adminSessionStatus := http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
 		writer.Header().Set("Cache-Control", "no-store")
 		writer.WriteHeader(http.StatusNoContent)
 	})
 	mux.Handle("GET /auth/session", application.Authentication.RequireSession(sessionStatus))
 	mux.Handle("GET /auth/admin-session", application.Authentication.RequireSession(
-		application.Authorization.RequirePermission(authz.ManageConnections, "", sessionStatus),
+		application.Authorization.RequirePermission(authz.ManageConnections, "", adminSessionStatus),
 	))
 	mux.Handle("/auth/", application.Authentication.Routes())
 	application.HTTP.Handler = application.Authentication.RequireSameOrigin(mux)
