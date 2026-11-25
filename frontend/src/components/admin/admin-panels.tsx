@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, type FormEvent, type ReactNode } from "react";
-import { ArrowRightLeft, Search, Trash2 } from "lucide-react";
+import { Search, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -594,28 +594,6 @@ export function AccessGrantMatrix({
         </tbody>
       </table>
     </div>
-  );
-}
-
-export function AdminModeSwitcher({
-  mode,
-  busy = false,
-  onSwitch,
-}: {
-  mode: "user" | "admin";
-  busy?: boolean;
-  onSwitch: (mode: "user" | "admin") => void;
-}) {
-  const nextMode = mode === "admin" ? "user" : "admin";
-  return (
-    <Button
-      disabled={busy}
-      onClick={() => onSwitch(nextMode)}
-      variant="outline"
-    >
-      <ArrowRightLeft aria-hidden="true" />
-      {busy ? "Switching…" : `Switch to ${nextMode} mode`}
-    </Button>
   );
 }
 

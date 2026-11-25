@@ -1,15 +1,30 @@
+import { Suspense } from "react";
 import type { ReactNode } from "react";
+import { headers } from "next/headers";
 import { AuthenticatedLayout } from "@/components/shared/layouts";
-import { mockAuth } from "@/lib/mock-data";
+import { LoadingState } from "@/components/shared/async-states";
 
-export default async function DatabaseRouteLayout({
+export default function DatabaseRouteLayout({
   children,
 }: {
   children: ReactNode;
 }) {
-  const user = await mockAuth.requireUser();
   return (
-    <AuthenticatedLayout isAdmin={user.isAdmin} userName={user.name}>
+    <Suspense
+      fallback={<LoadingState label="Checking your session" rows={2} />}
+    >
+      <AuthenticatedRouteShell>{children}</AuthenticatedRouteShell>
+    </Suspense>
+  );
+}
+
+async function AuthenticatedRouteShell({ children }: { children: ReactNode }) {
+  const requestHeaders = await headers();
+  return (
+    <AuthenticatedLayout
+      isAdmin={requestHeaders.get("x-datadock-admin") === "true"}
+      username={requestHeaders.get("x-datadock-username") ?? "Account"}
+    >
       {children}
     </AuthenticatedLayout>
   );

@@ -39,8 +39,8 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
     >
       <body className="min-h-full flex flex-col">
         <div className="border-b border-amber-300 bg-amber-50 px-4 py-2 text-center text-xs text-amber-950">
-          Demo mode: pages use in-memory mock data and do not authenticate or
-          change real databases.
+          Authentication uses the backend. Database, admin, and migration
+          features still use demo data.
         </div>
         {children}
         <ToastRegion />

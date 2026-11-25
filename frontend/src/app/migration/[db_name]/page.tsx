@@ -2,7 +2,7 @@ import { Suspense } from "react";
 import { notFound } from "next/navigation";
 import { MigrationDatabaseWorkspace } from "@/components/pages/page-clients";
 import { LoadingState } from "@/components/shared/async-states";
-import { mockAuth, mockDatabases, mockMigrations } from "@/lib/mock-data";
+import { mockDatabases, mockMigrations } from "@/lib/mock-data";
 
 type MigrationPageProps = {
   params: Promise<{ db_name: string }>;
@@ -19,7 +19,6 @@ export default function MigrationDatabasePage(props: MigrationPageProps) {
 }
 
 async function MigrationDatabaseContent({ params }: MigrationPageProps) {
-  await mockAuth.requireUser();
   const { db_name: dbName } = await params;
   const database = await mockDatabases.findByName(dbName);
   if (!database || database.engine !== "postgres" || database.access !== "view_edit") {

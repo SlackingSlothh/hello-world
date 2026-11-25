@@ -1,7 +1,6 @@
 "use client";
 
 import Link from "next/link";
-import { useRouter } from "next/navigation";
 import { useCallback, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -24,7 +23,10 @@ import {
   type GroupSummary,
   type MemberOption,
 } from "@/components/admin/admin-panels";
-import { AuthForm } from "@/components/auth/auth-form";
+import {
+  AuthForm,
+  type LoginFormValues,
+} from "@/components/auth/auth-form";
 import {
   DatabaseWorkspaceShell,
   QueryResults,
@@ -54,37 +56,41 @@ import {
 import { EmptyState } from "@/components/shared/async-states";
 import { ConfirmDialog } from "@/components/shared/confirm-dialog";
 import { PageHeader } from "@/components/shared/page-header";
+import { login } from "@/lib/api/auth";
 import { databaseRouteKey } from "@/lib/database-routing";
 import type { MockQueryRow, MockTableRow } from "@/lib/mock-data";
 
 export function AuthPageForm({
-  mode,
   nextPath,
   sessionExpired = false,
 }: {
-  mode: "login" | "register";
   nextPath?: string;
   sessionExpired?: boolean;
 }) {
-  const router = useRouter();
   const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string>();
 
-  async function submit() {
+  async function submit(values: LoginFormValues) {
     setBusy(true);
-    await new Promise((resolve) => setTimeout(resolve, 300));
-    toast.success(
-      mode === "login"
-        ? "Demo sign-in succeeded."
-        : "Demo account created. Ask an administrator to grant access.",
-    );
-    setBusy(false);
-    router.push(mode === "register" ? "/login" : safeReturnPath(nextPath));
+    setError(undefined);
+    try {
+      await login(values);
+      toast.success("Signed in.");
+      window.location.replace(safeReturnPath(nextPath));
+    } catch (submitError) {
+      setError(
+        submitError instanceof Error
+          ? submitError.message
+          : "Could not sign in.",
+      );
+    } finally {
+      setBusy(false);
+    }
   }
 
   return (
     <AuthForm
-      error={undefined}
-      mode={mode}
+      error={error}
       onSubmit={submit}
       sessionExpired={sessionExpired}
       submitting={busy}

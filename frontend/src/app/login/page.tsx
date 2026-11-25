@@ -25,14 +25,13 @@ async function LoginPageContent({ searchParams }: LoginPageProps) {
   return (
     <div className="space-y-4 py-8">
       <AuthPageForm
-        mode="login"
         nextPath={params.next ?? params.returnTo}
         sessionExpired={params.error === "SESSION_EXPIRED"}
       />
       <p className="text-center text-sm text-muted-foreground">
-        New here?{" "}
+        Need an account?{" "}
         <Link className="text-primary underline" href="/register">
-          Create an account
+          Contact an administrator
         </Link>
       </p>
     </div>

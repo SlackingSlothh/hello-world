@@ -3,7 +3,7 @@ import { notFound } from "next/navigation";
 import type { WorkspaceTab } from "@/components/database/database-panels";
 import { DatabaseWorkspace } from "@/components/pages/page-clients";
 import { LoadingState } from "@/components/shared/async-states";
-import { mockAuth, mockDatabases } from "@/lib/mock-data";
+import { mockDatabases } from "@/lib/mock-data";
 
 const tabs = new Set<WorkspaceTab>(["schema", "query"]);
 
@@ -26,7 +26,6 @@ async function DatabaseDetailContent({
   params,
   searchParams,
 }: DatabasePageProps) {
-  await mockAuth.requireUser();
   const [{ id }, query] = await Promise.all([params, searchParams]);
   const database = await mockDatabases.findById(id);
   if (!database) notFound();

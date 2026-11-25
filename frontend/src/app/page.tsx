@@ -60,12 +60,6 @@ async function LandingContent() {
           >
             Login <ArrowRight aria-hidden="true" />
           </Link>
-          <Link
-            className="inline-flex h-10 items-center justify-center rounded-md border bg-background px-4 text-sm font-medium hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-            href="/register"
-          >
-            Register
-          </Link>
         </div>
       </section>
       <section aria-label="Features" className="grid gap-4 sm:grid-cols-2">
