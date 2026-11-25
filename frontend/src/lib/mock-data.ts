@@ -18,12 +18,6 @@ import type {
 } from "@/components/migration/migration-panels";
 import { databaseRouteKey } from "@/lib/database-routing";
 
-export type DemoUser = {
-  id: string;
-  name: string;
-  isAdmin: boolean;
-};
-
 export type MockTableRow = {
   id: string;
   name: string;
@@ -58,24 +52,6 @@ abstract class MockRepository<T extends { id: string }> {
 
   async remove(id: string): Promise<void> {
     this.records = this.records.filter((item) => item.id !== id);
-  }
-}
-
-class MockAuthService {
-  private readonly user: DemoUser = {
-    id: "demo-admin",
-    name: "Demo Administrator",
-    isAdmin: true,
-  };
-
-  async requireUser(): Promise<DemoUser> {
-    return structuredClone(this.user);
-  }
-
-  async requireAdmin(): Promise<DemoUser> {
-    const user = await this.requireUser();
-    if (!user.isAdmin) throw new Error("Demo user is not an administrator.");
-    return user;
   }
 }
 
@@ -371,7 +347,6 @@ class MockUserRepository extends MockRepository<MemberOption> {
   }
 }
 
-export const mockAuth = new MockAuthService();
 export const mockConnections = new MockConnectionRepository();
 export const mockGroups = new MockGroupRepository();
 export const mockDatabases = new MockDatabaseRepository();
