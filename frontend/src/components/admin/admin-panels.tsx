@@ -5,7 +5,6 @@ import { Search, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import {
   DataTable,
   type DataTableColumn,
@@ -17,13 +16,13 @@ export type ConnectionSummary = {
   id: string;
   name: string;
   engine: "postgres" | "mysql" | "mariadb";
-  host: string;
-  port: number;
-  database: string;
-  status: string;
-  activeConnections?: number;
-  idleConnections?: number;
-  lastChecked?: string;
+  status: "connected" | "disconnected";
+  activeConnections: number;
+  idleConnections: number;
+  maxOpenConnections: number;
+  maxIdleConnections: number;
+  maxLifetimeSeconds: number;
+  maxIdleTimeSeconds: number;
 };
 
 export function ConnectionCard({
@@ -39,16 +38,16 @@ export function ConnectionCard({
         <div>
           <CardTitle>{connection.name}</CardTitle>
           <p className="mt-1 text-sm text-muted-foreground">
-            {connection.engine} · {connection.host}:{connection.port}/
-            {connection.database}
+            {connection.engine}
           </p>
         </div>
         <StatusBadge status={connection.status} />
       </CardHeader>
       <CardContent className="flex flex-wrap items-center justify-between gap-3 text-sm text-muted-foreground">
         <span>
-          Pool: {connection.activeConnections ?? "—"} active,{" "}
-          {connection.idleConnections ?? "—"} idle
+          Pool: {connection.activeConnections} active,{" "}
+          {connection.idleConnections} idle · max{" "}
+          {connection.maxOpenConnections || "unlimited"} open
         </span>
         <div className="flex flex-wrap gap-2">{actions}</div>
       </CardContent>
@@ -62,20 +61,23 @@ export function ConnectionList({
   onConnect,
   onDisconnect,
   onDelete,
+  pendingId,
 }: {
   connections: ConnectionSummary[];
   onEdit?: (connection: ConnectionSummary) => void;
   onConnect?: (connection: ConnectionSummary) => void;
   onDisconnect?: (connection: ConnectionSummary) => void;
   onDelete?: (connection: ConnectionSummary) => void;
+  pendingId?: string;
 }) {
   const columns: DataTableColumn<ConnectionSummary>[] = [
     { id: "name", header: "Connection", cell: (item) => item.name },
     { id: "engine", header: "Engine", cell: (item) => item.engine },
     {
-      id: "address",
-      header: "Host / database",
-      cell: (item) => `${item.host}:${item.port} / ${item.database}`,
+      id: "pool",
+      header: "Pool",
+      cell: (item) =>
+        `${item.activeConnections} active · ${item.idleConnections} idle · max ${item.maxOpenConnections || "unlimited"}`,
     },
     {
       id: "status",
@@ -83,18 +85,17 @@ export function ConnectionList({
       cell: (item) => <StatusBadge status={item.status} />,
     },
     {
-      id: "pool",
-      header: "Pool",
-      cell: (item) =>
-        `${item.activeConnections ?? "—"} active · ${item.idleConnections ?? "—"} idle`,
-    },
-    {
       id: "actions",
       header: "Actions",
       cell: (item) => (
         <div className="flex flex-wrap gap-1">
           {onEdit ? (
-            <Button onClick={() => onEdit(item)} size="sm" variant="outline">
+            <Button
+              disabled={pendingId === item.id}
+              onClick={() => onEdit(item)}
+              size="sm"
+              variant="outline"
+            >
               Edit
             </Button>
           ) : null}
@@ -102,20 +103,27 @@ export function ConnectionList({
             onDisconnect ? (
               <Button
                 onClick={() => onDisconnect(item)}
+                disabled={pendingId === item.id}
                 size="sm"
                 variant="outline"
               >
-                Disconnect
+                {pendingId === item.id ? "Working…" : "Disconnect"}
               </Button>
             ) : null
           ) : onConnect ? (
-            <Button onClick={() => onConnect(item)} size="sm" variant="outline">
-              Connect
+            <Button
+              disabled={pendingId === item.id}
+              onClick={() => onConnect(item)}
+              size="sm"
+              variant="outline"
+            >
+              {pendingId === item.id ? "Working…" : "Connect"}
             </Button>
           ) : null}
           {onDelete ? (
             <Button
               aria-label={`Delete ${item.name}`}
+              disabled={pendingId === item.id}
               onClick={() => onDelete(item)}
               size="icon-sm"
               variant="destructive"
@@ -151,8 +159,9 @@ export type ConnectionFormValues = {
   sslMode: string;
   maxOpenConnections: number;
   maxIdleConnections: number;
+  maxLifetimeSeconds: number;
+  maxIdleTimeSeconds: number;
   connectionTimeoutSeconds: number;
-  statementTimeoutSeconds: number;
 };
 
 const defaultConnection: ConnectionFormValues = {
@@ -166,21 +175,20 @@ const defaultConnection: ConnectionFormValues = {
   sslMode: "prefer",
   maxOpenConnections: 10,
   maxIdleConnections: 5,
+  maxLifetimeSeconds: 0,
+  maxIdleTimeSeconds: 0,
   connectionTimeoutSeconds: 10,
-  statementTimeoutSeconds: 30,
 };
 
 export function ConnectionForm({
   initialValue = defaultConnection,
   editing = false,
   busy = false,
-  onTest,
   onSubmit,
 }: {
   initialValue?: ConnectionFormValues;
   editing?: boolean;
   busy?: boolean;
-  onTest?: (values: ConnectionFormValues) => void | Promise<void>;
   onSubmit: (values: ConnectionFormValues) => void | Promise<void>;
 }) {
   const [values, setValues] = useState(initialValue);
@@ -234,6 +242,7 @@ export function ConnectionForm({
         />
         <NumberField
           label="Port"
+          min={1}
           value={values.port}
           onChange={(value) => update("port", value)}
         />
@@ -252,12 +261,12 @@ export function ConnectionForm({
         <TextField
           autoComplete="new-password"
           label={
-            editing ? "Password (leave blank to keep current)" : "Password"
+            editing ? "Password (re-enter to replace saved credentials)" : "Password"
           }
           type="password"
           value={values.password}
           onChange={(value) => update("password", value)}
-          required={!editing}
+          required
         />
         <TextField
           label="SSL mode"
@@ -275,27 +284,22 @@ export function ConnectionForm({
           onChange={(value) => update("maxIdleConnections", value)}
         />
         <NumberField
+          label="Max connection lifetime (seconds)"
+          value={values.maxLifetimeSeconds}
+          onChange={(value) => update("maxLifetimeSeconds", value)}
+        />
+        <NumberField
+          label="Max idle time (seconds)"
+          value={values.maxIdleTimeSeconds}
+          onChange={(value) => update("maxIdleTimeSeconds", value)}
+        />
+        <NumberField
           label="Connection timeout (seconds)"
           value={values.connectionTimeoutSeconds}
           onChange={(value) => update("connectionTimeoutSeconds", value)}
         />
-        <NumberField
-          label="Statement timeout (seconds)"
-          value={values.statementTimeoutSeconds}
-          onChange={(value) => update("statementTimeoutSeconds", value)}
-        />
       </div>
       <div className="flex flex-wrap justify-end gap-2">
-        {onTest ? (
-          <Button
-            disabled={busy}
-            onClick={() => void onTest(values)}
-            type="button"
-            variant="outline"
-          >
-            Test connection
-          </Button>
-        ) : null}
         <Button disabled={busy} type="submit">
           {busy ? "Saving…" : editing ? "Save changes" : "Create connection"}
         </Button>
@@ -307,24 +311,19 @@ export function ConnectionForm({
 export type GroupSummary = {
   id: string;
   name: string;
-  leaderName: string;
   memberCount: number;
-  memberIds?: string[];
   system?: boolean;
 };
 
 export function GroupList({
   groups,
   onEdit,
-  onDelete,
 }: {
   groups: GroupSummary[];
   onEdit?: (group: GroupSummary) => void;
-  onDelete?: (group: GroupSummary) => void;
 }) {
   const columns: DataTableColumn<GroupSummary>[] = [
     { id: "name", header: "Group", cell: (group) => group.name },
-    { id: "leader", header: "Leader", cell: (group) => group.leaderName },
     { id: "members", header: "Members", cell: (group) => group.memberCount },
     {
       id: "actions",
@@ -333,19 +332,10 @@ export function GroupList({
         <div className="flex gap-2">
           {onEdit ? (
             <Button onClick={() => onEdit(group)} size="sm" variant="outline">
-              Manage
+              Manage members
             </Button>
           ) : null}
-          {onDelete && !group.system ? (
-            <Button
-              aria-label={`Delete ${group.name}`}
-              onClick={() => onDelete(group)}
-              size="icon-sm"
-              variant="destructive"
-            >
-              <Trash2 aria-hidden="true" />
-            </Button>
-          ) : group.system ? (
+          {group.system ? (
             <span className="text-xs text-muted-foreground">System group</span>
           ) : null}
         </div>
@@ -357,18 +347,20 @@ export function GroupList({
   );
 }
 
-export type MemberOption = { id: string; label: string };
+export type MemberOption = { id: string; label: string; active?: boolean };
 
 export function MemberPicker({
   members,
   selectedIds,
   onSelectionChange,
   label = "Group members",
+  disabled = false,
 }: {
   members: MemberOption[];
   selectedIds: string[];
   onSelectionChange: (ids: string[]) => void;
   label?: string;
+  disabled?: boolean;
 }) {
   const [search, setSearch] = useState("");
   const filtered = members.filter((member) =>
@@ -384,7 +376,7 @@ export function MemberPicker({
   }
 
   return (
-    <fieldset className="space-y-3">
+    <fieldset className="space-y-3" disabled={disabled}>
       <legend className="text-sm font-medium">{label}</legend>
       <div className="relative">
         <Search
@@ -405,10 +397,16 @@ export function MemberPicker({
             <label className="flex cursor-pointer items-center gap-3 rounded px-2 py-2 text-sm hover:bg-muted">
               <input
                 checked={selectedIds.includes(member.id)}
+                disabled={
+                  member.active === false && !selectedIds.includes(member.id)
+                }
                 onChange={() => toggle(member.id)}
                 type="checkbox"
               />
               {member.label}
+              {member.active === false ? (
+                <span className="text-xs text-muted-foreground">(inactive)</span>
+              ) : null}
             </label>
           </li>
         ))}
@@ -423,29 +421,20 @@ export function MemberPicker({
 }
 
 export function GroupEditor({
-  name,
   members,
   selectedMemberIds,
-  leaderId,
   busy = false,
-  onNameChange,
+  disabled = false,
   onMembersChange,
-  onLeaderChange,
   onSubmit,
 }: {
-  name: string;
   members: MemberOption[];
   selectedMemberIds: string[];
-  leaderId: string;
   busy?: boolean;
-  onNameChange: (name: string) => void;
+  disabled?: boolean;
   onMembersChange: (ids: string[]) => void;
-  onLeaderChange: (id: string) => void;
   onSubmit: () => void;
 }) {
-  const selectedMembers = members.filter((member) =>
-    selectedMemberIds.includes(member.id),
-  );
   return (
     <form
       className="space-y-5"
@@ -454,45 +443,14 @@ export function GroupEditor({
         onSubmit();
       }}
     >
-      <div className="space-y-2">
-        <Label htmlFor="group-name">Group name</Label>
-        <Input
-          id="group-name"
-          onChange={(event) => onNameChange(event.target.value)}
-          required
-          value={name}
-        />
-      </div>
       <MemberPicker
+        disabled={disabled}
         members={members}
         onSelectionChange={onMembersChange}
         selectedIds={selectedMemberIds}
       />
-      <label className="block space-y-2 text-sm font-medium">
-        Group leader
-        <select
-          className="h-9 w-full rounded-md border bg-background px-3 text-sm"
-          onChange={(event) => onLeaderChange(event.target.value)}
-          required
-          value={leaderId}
-        >
-          <option value="">Choose a member</option>
-          {selectedMembers.map((member) => (
-            <option key={member.id} value={member.id}>
-              {member.label}
-            </option>
-          ))}
-        </select>
-      </label>
-      <Button
-        disabled={
-          busy ||
-          selectedMembers.length === 0 ||
-          !selectedMemberIds.includes(leaderId)
-        }
-        type="submit"
-      >
-        {busy ? "Saving…" : "Save group"}
+      <Button disabled={busy} type="submit">
+        {busy ? "Saving…" : "Save members"}
       </Button>
     </form>
   );
@@ -572,7 +530,11 @@ export function AccessGrantMatrix({
                         onChange(
                           group.id,
                           connection.id,
-                          (event.target.value || null) as AccessGrant["level"],
+                          event.target.value === "view"
+                            ? "view"
+                            : event.target.value === "view_edit"
+                              ? "view_edit"
+                              : null,
                         )
                       }
                       value={level}
@@ -630,16 +592,18 @@ function NumberField({
   label,
   value,
   onChange,
+  min = 0,
 }: {
   label: string;
   value: number;
   onChange: (value: number) => void;
+  min?: number;
 }) {
   return (
     <label className="space-y-2 text-sm font-medium">
       {label}
       <Input
-        min={0}
+        min={min}
         onChange={(event) => onChange(Number(event.target.value))}
         required
         type="number"

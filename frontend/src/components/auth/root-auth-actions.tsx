@@ -71,3 +71,27 @@ export async function RootAuthActions({
     </Link>
   );
 }
+
+export async function RootUserNavigation() {
+  const requestHeaders = await headers();
+  if (requestHeaders.get("x-datadock-auth-state") !== "authenticated") {
+    return null;
+  }
+
+  return (
+    <>
+      <Link
+        className="rounded-md px-3 py-2 text-sm text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        href="/db"
+      >
+        Databases
+      </Link>
+      <Link
+        className="rounded-md px-3 py-2 text-sm text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        href="/migration"
+      >
+        Migrations
+      </Link>
+    </>
+  );
+}

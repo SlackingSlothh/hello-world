@@ -1,11 +1,4 @@
 import type {
-  AccessGrant,
-  ConnectionFormValues,
-  ConnectionSummary,
-  GroupSummary,
-  MemberOption,
-} from "@/components/admin/admin-panels";
-import type {
   DatabaseSummary,
   SchemaNode,
 } from "@/components/database/database-panels";
@@ -52,83 +45,6 @@ abstract class MockRepository<T extends { id: string }> {
 
   async remove(id: string): Promise<void> {
     this.records = this.records.filter((item) => item.id !== id);
-  }
-}
-
-class MockConnectionRepository extends MockRepository<ConnectionSummary> {
-  constructor() {
-    super([
-      {
-        id: "conn-postgres",
-        name: "Sample PostgreSQL",
-        engine: "postgres",
-        host: "target-postgres",
-        port: 5432,
-        database: "sample",
-        status: "connected",
-        activeConnections: 2,
-        idleConnections: 4,
-        lastChecked: "2026-11-13T01:00:00.000Z",
-      },
-      {
-        id: "conn-mysql",
-        name: "Sample MySQL",
-        engine: "mysql",
-        host: "target-mysql",
-        port: 3306,
-        database: "sample",
-        status: "disconnected",
-        activeConnections: 0,
-        idleConnections: 0,
-      },
-      {
-        id: "conn-mariadb",
-        name: "Sample MariaDB",
-        engine: "mariadb",
-        host: "target-mariadb",
-        port: 3306,
-        database: "sample",
-        status: "connected",
-        activeConnections: 1,
-        idleConnections: 2,
-      },
-    ]);
-  }
-
-  async testConfiguration(
-    values: ConnectionFormValues,
-  ): Promise<{ ok: boolean; message: string }> {
-    const ok = Boolean(
-      values.host.trim() && values.database.trim() && values.port > 0,
-    );
-    return {
-      ok,
-      message: ok
-        ? "Mock connection test succeeded."
-        : "Host, database, and port are required.",
-    };
-  }
-}
-
-class MockGroupRepository extends MockRepository<GroupSummary> {
-  constructor() {
-    super([
-      {
-        id: "group-analytics",
-        name: "Analytics",
-        leaderName: "Ari Leader",
-        memberCount: 3,
-        memberIds: ["user-ari", "user-bea", "user-cam"],
-      },
-      {
-        id: "group-admins",
-        name: "Administrators",
-        leaderName: "Demo Administrator",
-        memberCount: 2,
-        memberIds: ["demo-admin", "user-cam"],
-        system: true,
-      },
-    ]);
   }
 }
 
@@ -215,31 +131,6 @@ class MockDatabaseRepository extends MockRepository<DatabaseSummary> {
       { id: 1, name: "Riley Chen", status: "active" },
       { id: 2, name: "Sam Jordan", status: "active" },
     ];
-  }
-}
-
-class MockAccessRepository extends MockRepository<AccessGrant> {
-  constructor() {
-    super([
-      {
-        id: "grant-analytics-postgres",
-        groupId: "group-analytics",
-        connectionId: "conn-postgres",
-        level: "view_edit",
-      },
-      {
-        id: "grant-analytics-mysql",
-        groupId: "group-analytics",
-        connectionId: "conn-mysql",
-        level: "view",
-      },
-      {
-        id: "grant-admins-postgres",
-        groupId: "group-admins",
-        connectionId: "conn-postgres",
-        level: "view",
-      },
-    ]);
   }
 }
 
@@ -336,20 +227,5 @@ class MockMigrationRepository extends MockRepository<MigrationRecord> {
   }
 }
 
-class MockUserRepository extends MockRepository<MemberOption> {
-  constructor() {
-    super([
-      { id: "user-ari", label: "Ari Leader (ari@example.test)" },
-      { id: "user-bea", label: "Bea Analyst (bea@example.test)" },
-      { id: "user-cam", label: "Cam Developer (cam@example.test)" },
-      { id: "demo-admin", label: "Demo Administrator (admin@example.test)" },
-    ]);
-  }
-}
-
-export const mockConnections = new MockConnectionRepository();
-export const mockGroups = new MockGroupRepository();
 export const mockDatabases = new MockDatabaseRepository();
-export const mockAccessGrants = new MockAccessRepository();
 export const mockMigrations = new MockMigrationRepository();
-export const mockUsers = new MockUserRepository();

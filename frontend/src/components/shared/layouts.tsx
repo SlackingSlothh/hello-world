@@ -53,9 +53,12 @@ function NavLink({ href, children }: LayoutProps & { href: string }) {
 export function PublicLayout({
   children,
   authActions,
-}: LayoutProps & { authActions?: ReactNode }) {
+  authNavigation,
+}: LayoutProps & { authActions?: ReactNode; authNavigation?: ReactNode }) {
   return authActions ? (
-    <Shell identity={authActions}>{children}</Shell>
+    <Shell identity={authActions} navigation={authNavigation}>
+      {children}
+    </Shell>
   ) : (
     <Shell navigation={<NavLink href="/login">Sign in</NavLink>}>
       {children}
