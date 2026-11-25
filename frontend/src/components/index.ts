@@ -1,4 +1,5 @@
 export * from "./admin/admin-panels";
+export * from "./auth/account-menu";
 export * from "./auth/auth-form";
 export * from "./database/database-panels";
 export * from "./migration/migration-panels";
@@ -6,7 +7,6 @@ export * from "./shared/async-states";
 export * from "./shared/confirm-dialog";
 export * from "./shared/data-table";
 export * from "./shared/layouts";
-export * from "./shared/mode-switch-control";
 export * from "./shared/page-header";
 export * from "./shared/pagination-controls";
 export * from "./shared/status-badge";

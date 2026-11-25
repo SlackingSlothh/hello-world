@@ -1,6 +1,6 @@
 import Link from "next/link";
 import type { ReactNode } from "react";
-import { ModeSwitchControl } from "@/components/shared/mode-switch-control";
+import { AccountMenu } from "@/components/auth/account-menu";
 
 type LayoutProps = {
   children: ReactNode;
@@ -51,12 +51,7 @@ function NavLink({ href, children }: LayoutProps & { href: string }) {
 export function PublicLayout({ children }: LayoutProps) {
   return (
     <Shell
-      navigation={
-        <>
-          <NavLink href="/login">Sign in</NavLink>
-          <NavLink href="/register">Register</NavLink>
-        </>
-      }
+      navigation={<NavLink href="/login">Sign in</NavLink>}
     >
       {children}
     </Shell>
@@ -65,21 +60,12 @@ export function PublicLayout({ children }: LayoutProps) {
 
 export function AuthenticatedLayout({
   children,
-  userName,
+  username,
   isAdmin = false,
-}: LayoutProps & { userName?: string; isAdmin?: boolean }) {
+}: LayoutProps & { username: string; isAdmin: boolean }) {
   return (
     <Shell
-      identity={
-        <div className="flex flex-wrap items-center gap-2">
-          {isAdmin ? (
-            <ModeSwitchControl mode="user" />
-          ) : null}
-          {userName ? (
-            <span className="text-sm text-muted-foreground">{userName}</span>
-          ) : undefined}
-        </div>
-      }
+      identity={<AccountMenu isAdmin={isAdmin} mode="user" username={username} />}
       navigation={
         <>
           <NavLink href="/db">Databases</NavLink>
@@ -94,18 +80,11 @@ export function AuthenticatedLayout({
 
 export function AdminLayout({
   children,
-  userName,
-}: LayoutProps & { userName?: string }) {
+  username,
+}: LayoutProps & { username: string }) {
   return (
     <Shell
-      identity={
-        <div className="flex flex-wrap items-center gap-2">
-          <ModeSwitchControl mode="admin" />
-          {userName ? (
-            <span className="text-sm text-muted-foreground">{userName}</span>
-          ) : null}
-        </div>
-      }
+      identity={<AccountMenu isAdmin mode="admin" username={username} />}
       navigation={
         <>
           <NavLink href="/admin/connections">Connections</NavLink>
