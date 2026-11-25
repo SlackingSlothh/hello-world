@@ -50,9 +50,7 @@ function NavLink({ href, children }: LayoutProps & { href: string }) {
 
 export function PublicLayout({ children }: LayoutProps) {
   return (
-    <Shell
-      navigation={<NavLink href="/login">Sign in</NavLink>}
-    >
+    <Shell navigation={<NavLink href="/login">Sign in</NavLink>}>
       {children}
     </Shell>
   );
@@ -65,7 +63,9 @@ export function AuthenticatedLayout({
 }: LayoutProps & { username: string; isAdmin: boolean }) {
   return (
     <Shell
-      identity={<AccountMenu isAdmin={isAdmin} mode="user" username={username} />}
+      identity={
+        <AccountMenu isAdmin={isAdmin} mode="user" username={username} />
+      }
       navigation={
         <>
           <NavLink href="/db">Databases</NavLink>
@@ -90,7 +90,6 @@ export function AdminLayout({
           <NavLink href="/admin/connections">Connections</NavLink>
           <NavLink href="/admin/groups">Groups</NavLink>
           <NavLink href="/admin/access">Access</NavLink>
-          <NavLink href="/migration">Migrations</NavLink>
         </>
       }
     >
