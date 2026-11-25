@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/stdlib"
 	"hello-world/internal/database/platform"
 	accessapp "hello-world/internal/services/access"
@@ -70,6 +71,17 @@ func TestGroupMembershipAndSessions(t *testing.T) {
 	if err := store.SeedAccount(ctx, seed); err != nil {
 		t.Fatal(err)
 	}
+	assertLeader := func(groupID string, want sql.NullString) {
+		t.Helper()
+		var got sql.NullString
+		if err := db.QueryRowContext(ctx, `SELECT leader_user_id FROM access_groups WHERE id=$1`, groupID).Scan(&got); err != nil {
+			t.Fatal(err)
+		}
+		if got != want {
+			t.Fatalf("group %s leader = %+v, want %+v", groupID, got, want)
+		}
+	}
+	assertLeader(seed.GroupID, sql.NullString{String: seed.ID, Valid: true})
 	user, err := service.CreateUser(ctx, "alice", "test password")
 	if err != nil {
 		t.Fatal(err)
@@ -77,6 +89,15 @@ func TestGroupMembershipAndSessions(t *testing.T) {
 	group, err := service.CreateGroup(ctx, "Analysts")
 	if err != nil {
 		t.Fatal(err)
+	}
+	assertLeader(group.ID, sql.NullString{})
+	_, err = db.ExecContext(ctx, `UPDATE access_groups SET leader_user_id=$1 WHERE id=$2`, seed.ID, group.ID)
+	var fkErr *pgconn.PgError
+	if !errors.As(err, &fkErr) || fkErr.Code != "23503" {
+		t.Fatalf("appointing a leader from another group: expected foreign key violation, got %v", err)
+	}
+	if err := store.SetGroupMember(ctx, seed.GroupID, seed.ID, false); !errors.As(err, &fkErr) || fkErr.Code != "23503" {
+		t.Fatalf("removing the current leader: expected foreign key violation, got %v", err)
 	}
 	sessionStore, err := persistence.NewSessionStore(db)
 	if err != nil {
@@ -183,12 +204,19 @@ func TestGroupMembershipAndSessions(t *testing.T) {
 	if _, err := sessions.Validate(ctx, newIdentifier); err != nil {
 		t.Fatal("duplicate removal revoked a new login")
 	}
+	if err := store.SetGroupMember(ctx, seed.GroupID, user.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, `UPDATE access_groups SET leader_user_id=$1 WHERE id=$2`, user.ID, seed.GroupID); err != nil {
+		t.Fatal(err)
+	}
 	if err := store.SetGroupMember(ctx, seed.GroupID, seed.ID, false); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.SeedAccount(ctx, seed); err != nil {
 		t.Fatal(err)
 	}
+	assertLeader(seed.GroupID, sql.NullString{String: user.ID, Valid: true})
 	access, err = store.LoadAccess(ctx, seed.ID)
 	if err != nil || access.IsPlatformAdmin {
 		t.Fatal("seed restored removed membership")
