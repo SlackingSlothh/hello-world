@@ -1,11 +1,5 @@
-import Link from "next/link";
-import {
-  ArrowRight,
-  Database,
-  History,
-  ShieldCheck,
-  Workflow,
-} from "lucide-react";
+import { Suspense } from "react";
+import { Database, History, ShieldCheck, Workflow } from "lucide-react";
 import { cacheLife } from "next/cache";
 import {
   Card,
@@ -16,6 +10,7 @@ import {
 } from "@/components/ui/card";
 import { PublicLayout } from "@/components/shared/layouts";
 import { PageHeader } from "@/components/shared/page-header";
+import { RootAuthActions } from "@/components/auth/root-auth-actions";
 
 const features = [
   {
@@ -48,19 +43,11 @@ async function LandingContent() {
 
   return (
     <>
-      <section className="py-8 sm:py-14">
+      <section className="sm:py-1">
         <PageHeader
           description="A collaborative workspace for browsing databases and managing reviewed schema migrations."
           title="HelloWorld!"
         />
-        <div className="flex flex-wrap gap-3">
-          <Link
-            className="inline-flex h-10 items-center justify-center gap-2 rounded-md bg-primary px-4 text-sm font-medium text-primary-foreground hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-            href="/login"
-          >
-            Login <ArrowRight aria-hidden="true" />
-          </Link>
-        </div>
       </section>
       <section aria-label="Features" className="grid gap-4 sm:grid-cols-2">
         {features.map(({ title, description, icon: Icon }) => (
@@ -84,8 +71,19 @@ async function LandingContent() {
 
 export default function HomePage() {
   return (
-    <PublicLayout>
+    <PublicLayout
+      authActions={
+        <Suspense fallback={<span aria-hidden="true" className="h-9 w-20" />}>
+          <RootAuthActions placement="header" />
+        </Suspense>
+      }
+    >
       <LandingContent />
+      <div className="mt-4 flex flex-wrap gap-3">
+        <Suspense fallback={<span aria-hidden="true" className="h-10 w-32" />}>
+          <RootAuthActions placement="hero" />
+        </Suspense>
+      </div>
     </PublicLayout>
   );
 }

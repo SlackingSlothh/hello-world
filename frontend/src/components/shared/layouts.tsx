@@ -11,7 +11,7 @@ function Shell({
   navigation,
   identity,
 }: LayoutProps & {
-  navigation: ReactNode;
+  navigation?: ReactNode;
   identity?: ReactNode;
 }) {
   return (
@@ -21,12 +21,14 @@ function Shell({
           <Link className="text-lg font-semibold tracking-tight" href="/">
             HelloWorld
           </Link>
-          <nav
-            aria-label="Main navigation"
-            className="flex flex-wrap items-center gap-2"
-          >
-            {navigation}
-          </nav>
+          {navigation ? (
+            <nav
+              aria-label="Main navigation"
+              className="flex flex-wrap items-center gap-2"
+            >
+              {navigation}
+            </nav>
+          ) : null}
           {identity}
         </div>
       </header>
@@ -48,8 +50,13 @@ function NavLink({ href, children }: LayoutProps & { href: string }) {
   );
 }
 
-export function PublicLayout({ children }: LayoutProps) {
-  return (
+export function PublicLayout({
+  children,
+  authActions,
+}: LayoutProps & { authActions?: ReactNode }) {
+  return authActions ? (
+    <Shell identity={authActions}>{children}</Shell>
+  ) : (
     <Shell navigation={<NavLink href="/login">Sign in</NavLink>}>
       {children}
     </Shell>
