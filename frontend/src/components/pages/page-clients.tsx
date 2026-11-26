@@ -9,6 +9,7 @@ import {
   useState,
   type FormEvent,
 } from "react";
+import { XIcon } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -29,10 +30,7 @@ import {
   type ConnectionFormValues,
   type ConnectionSummary,
 } from "@/components/admin/admin-panels";
-import {
-  AuthForm,
-  type LoginFormValues,
-} from "@/components/auth/auth-form";
+import { AuthForm, type LoginFormValues } from "@/components/auth/auth-form";
 import {
   DatabaseWorkspaceShell,
   QueryResults,
@@ -157,7 +155,11 @@ export function AdminHome() {
             "Configure managed database connections.",
             "/admin/connections",
           ],
-          ["Groups", "Create groups and manage their members.", "/admin/groups"],
+          [
+            "Groups",
+            "Create groups and manage their members.",
+            "/admin/groups",
+          ],
           ["Access", "Grant groups view or edit access.", "/admin/access"],
         ].map(([title, description, href]) => (
           <li key={href}>
@@ -257,9 +259,7 @@ export function ConnectionManagement() {
     try {
       await setConnectionConnected(connection.id, connected);
       await refresh();
-      toast.success(
-        `Connection ${connected ? "connected" : "disconnected"}.`,
-      );
+      toast.success(`Connection ${connected ? "connected" : "disconnected"}.`);
     } catch (error) {
       setActionError(
         errorMessage(error, "Could not change the connection state."),
@@ -466,9 +466,7 @@ export function GroupManagement() {
     }
   }
 
-  async function openMembers(
-    group: ManagedGroup,
-  ) {
+  async function openMembers(group: ManagedGroup) {
     setActiveGroup(group);
     setMembersBusy(true);
     setMemberError(undefined);
@@ -603,8 +601,8 @@ export function GroupManagement() {
       )}
       {activeGroup ? (
         <Card>
-          <CardHeader className="flex-row items-start justify-between gap-3">
-            <div>
+          <CardHeader className="relative">
+            <div className="pr-10">
               <CardTitle>Members: {activeGroup.name}</CardTitle>
               <CardDescription>
                 Users are listed with their current account status. Inactive
@@ -612,14 +610,16 @@ export function GroupManagement() {
               </CardDescription>
             </div>
             <Button
+              aria-label="Close group members"
+              className="absolute right-6 top-3"
               onClick={() => {
                 setActiveGroup(undefined);
                 setMemberError(undefined);
               }}
-              size="sm"
-              variant="outline"
+              size="icon"
+              variant="ghost"
             >
-              Close
+              <XIcon aria-hidden="true" />
             </Button>
           </CardHeader>
           <CardContent className="space-y-4">
@@ -825,8 +825,12 @@ export function MigrationDatabaseList({
             </CardHeader>
             <CardContent className="flex items-center justify-between gap-3">
               <div className="flex flex-wrap gap-2 text-sm text-muted-foreground">
-                {database.migrationRunning ? <span>Migration running</span> : null}
-                {database.awaitingReview ? <span>Request awaiting review</span> : null}
+                {database.migrationRunning ? (
+                  <span>Migration running</span>
+                ) : null}
+                {database.awaitingReview ? (
+                  <span>Request awaiting review</span>
+                ) : null}
               </div>
               <Link
                 className="inline-flex h-8 shrink-0 items-center justify-center rounded-md bg-primary px-3 text-sm font-medium text-primary-foreground hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
@@ -1073,7 +1077,8 @@ function MigrationWorkspace({
     <div className="space-y-8">
       {databaseName ? (
         <p className="text-sm text-muted-foreground">
-          Managing migrations for <span className="font-medium text-foreground">{databaseName}</span>
+          Managing migrations for{" "}
+          <span className="font-medium text-foreground">{databaseName}</span>
         </p>
       ) : null}
       <section className="space-y-4">
