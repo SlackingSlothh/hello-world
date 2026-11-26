@@ -1,10 +1,5 @@
-import { GroupManagement } from "@/components/pages/page-clients";
-import { mockGroups, mockUsers } from "@/lib/mock-data";
+import { GroupManagement } from "@/components/admin/group-management";
 
-export default async function GroupsPage() {
-  const [groups, members] = await Promise.all([
-    mockGroups.list(),
-    mockUsers.list(),
-  ]);
-  return <GroupManagement initialGroups={groups} members={members} />;
+export default function GroupsPage() {
+  return <GroupManagement />;
 }

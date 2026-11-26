@@ -41,7 +41,7 @@ func (s Service) CreateGroup(ctx context.Context, name string, memberIDs []strin
 	if _, err := rand.Read(id[:]); err != nil {
 		return Group{}, err
 	}
-	group := Group{ID: hex.EncodeToString(id[:]), Name: name, LeaderID: &leaderID, Grants: []Grant{}}
+	group := Group{ID: hex.EncodeToString(id[:]), Name: name, LeaderID: &leaderID, MemberCount: len(memberIDs), Grants: []Grant{}}
 	if err := s.Groups.CreateGroup(ctx, group, memberIDs); err != nil {
 		return Group{}, err
 	}

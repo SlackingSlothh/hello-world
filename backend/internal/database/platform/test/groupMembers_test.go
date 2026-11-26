@@ -219,7 +219,7 @@ func TestGroupMembershipAndSessions(t *testing.T) {
 	request("POST", groupsURL, origin, adminCookie, 400, `{"name":"Writers","memberIds":["dormant"],"leaderId":"dormant"}`)
 	created := request("POST", groupsURL, origin, adminCookie, 201, fmt.Sprintf(`{"name":"Writers","memberIds":[%q,"dormant"],"leaderId":%q}`, user.ID, user.ID))
 	var writers accessapp.Group
-	if err := json.Unmarshal(created.Body.Bytes(), &writers); err != nil || writers.ID == "" || writers.LeaderID == nil || *writers.LeaderID != user.ID {
+	if err := json.Unmarshal(created.Body.Bytes(), &writers); err != nil || writers.ID == "" || writers.LeaderID == nil || *writers.LeaderID != user.ID || writers.MemberCount != 2 {
 		t.Fatalf("incorrect new group: %s", created.Body.String())
 	}
 	writersURL := groupsURL + "/" + writers.ID
@@ -267,21 +267,21 @@ func TestGroupMembershipAndSessions(t *testing.T) {
 		t.Fatalf("incorrect candidate activity: %s", response.Body.String())
 	}
 
-	listLeaders := func() map[string]*string {
+	listGroups := func() map[string]accessapp.Group {
 		t.Helper()
 		response := request("GET", groupsURL, origin, adminCookie, 200)
 		var listing struct{ Groups []accessapp.Group }
 		if err := json.Unmarshal(response.Body.Bytes(), &listing); err != nil {
 			t.Fatal(err)
 		}
-		leaders := make(map[string]*string)
+		groups := make(map[string]accessapp.Group)
 		for _, listed := range listing.Groups {
-			leaders[listed.ID] = listed.LeaderID
+			groups[listed.ID] = listed
 		}
-		return leaders
+		return groups
 	}
-	if leader, exists := listLeaders()[group.ID]; !exists || leader != nil {
-		t.Fatal("legacy group should be listed without a leader")
+	if listed, exists := listGroups()[group.ID]; !exists || listed.LeaderID != nil || listed.MemberCount != 0 {
+		t.Fatal("empty legacy group should be listed without a leader")
 	}
 	legacyURL := groupsURL + "/" + group.ID
 	request("PUT", legacyURL+"/members/admin", origin, adminCookie, 204)
@@ -302,16 +302,20 @@ func TestGroupMembershipAndSessions(t *testing.T) {
 	close(start)
 	transferStatus, removeStatus := <-transferred, <-removed
 	expectedLeader := seed.ID
+	expectedCount := 1
 	switch {
 	case transferStatus == 204 && removeStatus == 409:
 		expectedLeader = user.ID
+		expectedCount = 2
 	case transferStatus == 400 && removeStatus == 204:
 	default:
 		t.Fatalf("transfer and remove returned %d and %d", transferStatus, removeStatus)
 	}
-	leaders := listLeaders()
-	if leaders[group.ID] == nil || *leaders[group.ID] != expectedLeader || leaders[writers.ID] == nil || *leaders[writers.ID] != user.ID {
-		t.Fatal("listed group leaders do not match the persisted changes")
+	listed := listGroups()
+	legacy, createdGroup := listed[group.ID], listed[writers.ID]
+	if legacy.LeaderID == nil || *legacy.LeaderID != expectedLeader || legacy.MemberCount != expectedCount ||
+		createdGroup.LeaderID == nil || *createdGroup.LeaderID != user.ID || createdGroup.MemberCount != 2 {
+		t.Fatal("listed leaders and member counts do not match the persisted changes")
 	}
 
 	if err := store.SetGroupMember(ctx, seed.GroupID, user.ID, true); err != nil {

@@ -3,7 +3,6 @@ import type {
   ConnectionFormValues,
   ConnectionSummary,
   GroupSummary,
-  MemberOption,
 } from "@/components/admin/admin-panels";
 import type {
   DatabaseSummary,
@@ -336,20 +335,8 @@ class MockMigrationRepository extends MockRepository<MigrationRecord> {
   }
 }
 
-class MockUserRepository extends MockRepository<MemberOption> {
-  constructor() {
-    super([
-      { id: "user-ari", label: "Ari Leader (ari@example.test)" },
-      { id: "user-bea", label: "Bea Analyst (bea@example.test)" },
-      { id: "user-cam", label: "Cam Developer (cam@example.test)" },
-      { id: "demo-admin", label: "Demo Administrator (admin@example.test)" },
-    ]);
-  }
-}
-
 export const mockConnections = new MockConnectionRepository();
 export const mockGroups = new MockGroupRepository();
 export const mockDatabases = new MockDatabaseRepository();
 export const mockAccessGrants = new MockAccessRepository();
 export const mockMigrations = new MockMigrationRepository();
-export const mockUsers = new MockUserRepository();

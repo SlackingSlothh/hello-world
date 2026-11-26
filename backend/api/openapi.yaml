@@ -1704,7 +1704,7 @@ components:
           enum: [read, write]
     AccessGroup:
       type: object
-      required: [id, name, isAdmin, leaderId, grants]
+      required: [id, name, isAdmin, leaderId, memberCount, grants]
       properties:
         id:
           type: string
@@ -1715,6 +1715,9 @@ components:
         leaderId:
           type: [string, "null"]
           description: Null for an existing group awaiting leader assignment.
+        memberCount:
+          type: integer
+          minimum: 0
         grants:
           type: array
           items:

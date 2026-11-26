@@ -10,8 +10,9 @@ import (
 )
 
 func (s *AuthStore) ListGroupAccess(ctx context.Context) ([]accessapp.Group, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT g.id,g.name,g.is_admin,g.leader_user_id,cg.database_id,cg.access_level
+	rows, err := s.db.QueryContext(ctx, `SELECT g.id,g.name,g.is_admin,g.leader_user_id,COALESCE(m.member_count,0),cg.database_id,cg.access_level
 		FROM access_groups g LEFT JOIN connection_grants cg ON cg.group_id=g.id
+		LEFT JOIN (SELECT group_id,count(*) AS member_count FROM user_group_memberships GROUP BY group_id) m ON m.group_id=g.id
 		ORDER BY g.name,g.id,cg.database_id`)
 	if err != nil {
 		return nil, fmt.Errorf("query group access: %w", err)
@@ -24,16 +25,17 @@ func (s *AuthStore) ListGroupAccess(ctx context.Context) ([]accessapp.Group, err
 		var id, name string
 		var isAdmin bool
 		var leaderID *string
+		var memberCount int
 		var databaseID sql.NullString
 		var level sql.NullInt64
-		if err := rows.Scan(&id, &name, &isAdmin, &leaderID, &databaseID, &level); err != nil {
+		if err := rows.Scan(&id, &name, &isAdmin, &leaderID, &memberCount, &databaseID, &level); err != nil {
 			return nil, fmt.Errorf("scan group access: %w", err)
 		}
 		index, exists := indices[id]
 		if !exists {
 			index = len(groups)
 			indices[id] = index
-			groups = append(groups, accessapp.Group{ID: id, Name: name, IsAdmin: isAdmin, LeaderID: leaderID, Grants: []accessapp.Grant{}})
+			groups = append(groups, accessapp.Group{ID: id, Name: name, IsAdmin: isAdmin, LeaderID: leaderID, MemberCount: memberCount, Grants: []accessapp.Grant{}})
 		}
 		if databaseID.Valid {
 			if authz.AccessLevel(level.Int64) == authz.NoAccess {

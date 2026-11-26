@@ -15,13 +15,9 @@ import {
   AccessGrantMatrix,
   ConnectionForm,
   ConnectionList,
-  GroupEditor,
-  GroupList,
   type AccessGrant,
   type ConnectionFormValues,
   type ConnectionSummary,
-  type GroupSummary,
-  type MemberOption,
 } from "@/components/admin/admin-panels";
 import {
   AuthForm,
@@ -284,107 +280,6 @@ export function ConnectionManagement({
         title="Delete connection"
         confirmLabel="Delete connection"
         destructive
-      />
-    </div>
-  );
-}
-
-export function GroupManagement({
-  initialGroups,
-  members,
-}: {
-  initialGroups: GroupSummary[];
-  members: MemberOption[];
-}) {
-  const [groups, setGroups] = useState(initialGroups);
-  const [editorOpen, setEditorOpen] = useState(false);
-  const [name, setName] = useState("");
-  const [memberIds, setMemberIds] = useState<string[]>([]);
-  const [leaderId, setLeaderId] = useState("");
-  const [editingGroup, setEditingGroup] = useState<GroupSummary>();
-
-  function saveGroup() {
-    const leader = members.find((member) => member.id === leaderId);
-    if (!leader || !name.trim()) return;
-    setGroups((current) => {
-      const saved: GroupSummary = {
-        id: editingGroup?.id ?? `group-${Date.now()}`,
-        name: name.trim(),
-        leaderName: leader.label,
-        memberCount: memberIds.length,
-        memberIds,
-      };
-      return editingGroup
-        ? current.map((group) => (group.id === editingGroup.id ? saved : group))
-        : [...current, saved];
-    });
-    setName("");
-    setMemberIds([]);
-    setLeaderId("");
-    setEditorOpen(false);
-    setEditingGroup(undefined);
-    toast.success(editingGroup ? "Mock group updated." : "Mock group created.");
-  }
-
-  function openEditor(group?: GroupSummary) {
-    setEditingGroup(group);
-    setName(group?.name ?? "");
-    setMemberIds(group?.memberIds ?? []);
-    setLeaderId(
-      members.find((member) => member.label === group?.leaderName)?.id ?? "",
-    );
-    setEditorOpen(true);
-  }
-
-  return (
-    <div className="space-y-5">
-      <PageHeader
-        actions={
-          <Button
-            onClick={() => (editorOpen ? setEditorOpen(false) : openEditor())}
-          >
-            {editorOpen ? "Close form" : "Create group"}
-          </Button>
-        }
-        description="Every group must have exactly one leader who is also a member."
-        title="Groups"
-      />
-      {editorOpen ? (
-        <Card>
-          <CardHeader>
-            <CardTitle>
-              {editingGroup ? `Edit ${editingGroup.name}` : "New group"}
-            </CardTitle>
-            <CardDescription>
-              The Administrators system group cannot be deleted.
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <GroupEditor
-              leaderId={leaderId}
-              members={members}
-              name={name}
-              onLeaderChange={setLeaderId}
-              onMembersChange={(ids) => {
-                setMemberIds(ids);
-                if (!ids.includes(leaderId)) setLeaderId("");
-              }}
-              onNameChange={setName}
-              onSubmit={saveGroup}
-              selectedMemberIds={memberIds}
-            />
-          </CardContent>
-        </Card>
-      ) : null}
-      <GroupList
-        groups={groups}
-        onDelete={(group) => {
-          setGroups((current) =>
-            current.filter((item) => item.id !== group.id),
-          );
-          toast.success("Mock group removed.");
-        }}
-        onEdit={openEditor}
       />
     </div>
   );
