@@ -16,7 +16,6 @@ var (
 	ErrNotFound      = errors.New("managed database connection not found")
 	ErrAlreadyExists = errors.New("managed database connection already exists")
 	ErrDisconnected  = errors.New("managed database connection is disconnected")
-	ErrInvalidPool   = errors.New("invalid connection pool settings")
 )
 
 // PoolConfig controls a database/sql connection pool. A zero limit means
@@ -291,7 +290,7 @@ func (r *Registry) Test(ctx context.Context, id string) (time.Duration, error) {
 // UpdatePool validates and applies pool settings to an existing connection.
 func (r *Registry) UpdatePool(id string, pool PoolConfig) (Connection, error) {
 	pool = normalizedPool(pool)
-	if err := ValidatePool(pool); err != nil {
+	if err := validatePool(pool); err != nil {
 		return Connection{}, err
 	}
 	r.mu.Lock()
@@ -305,6 +304,47 @@ func (r *Registry) UpdatePool(id string, pool PoolConfig) (Connection, error) {
 	}
 	entry.config.Pool = pool
 	return publicConnection(entry), nil
+}
+
+// Replace validates a new DSN/config and swaps it in only after it can connect.
+// Existing in-flight operations may finish on the old pool; it is then closed.
+func (r *Registry) Replace(ctx context.Context, id string, config Config) (Connection, error) {
+	config.ID = id
+	config.Driver = normalizeDriver(config.Driver)
+	config.Pool = normalizedPool(config.Pool)
+	if err := validateConfig(config); err != nil {
+		return Connection{}, err
+	}
+	driverName, ok := sqlDriverName(config.Driver)
+	if !ok {
+		return Connection{}, fmt.Errorf("unsupported database driver %q", config.Driver)
+	}
+	next, err := r.open(driverName, config.DSN)
+	if err != nil {
+		return Connection{}, fmt.Errorf("open database: %w", err)
+	}
+	applyPool(next, config.Pool)
+	if err := r.ping(ctx, next); err != nil {
+		_ = next.Close()
+		return Connection{}, fmt.Errorf("ping database: %w", err)
+	}
+
+	r.mu.Lock()
+	entry, exists := r.connections[id]
+	if !exists {
+		r.mu.Unlock()
+		_ = next.Close()
+		return Connection{}, ErrNotFound
+	}
+	old := entry.db
+	entry.config = config
+	entry.db = next
+	view := publicConnection(entry)
+	r.mu.Unlock()
+	if old != nil {
+		_ = old.Close()
+	}
+	return view, nil
 }
 
 // Remove deregisters and closes a managed connection. sql.DB.Close prevents new
@@ -393,17 +433,12 @@ func validateConfig(config Config) error {
 func validatePool(pool PoolConfig) error {
 	if pool.MaxOpen < 0 || pool.MaxIdle < 0 || pool.MaxLifetime < 0 || pool.MaxIdleTime < 0 ||
 		pool.MaxLifetimeSeconds < 0 || pool.MaxIdleTimeSeconds < 0 {
-		return fmt.Errorf("%w: values cannot be negative", ErrInvalidPool)
+		return errors.New("pool settings cannot be negative")
 	}
 	if pool.MaxOpen > 0 && pool.MaxIdle > pool.MaxOpen {
-		return fmt.Errorf("%w: max idle connections cannot exceed max open connections", ErrInvalidPool)
+		return errors.New("max idle connections cannot exceed max open connections")
 	}
 	return nil
-}
-
-// ValidatePool checks that pool limits can be safely applied to a database/sql pool.
-func ValidatePool(pool PoolConfig) error {
-	return validatePool(normalizedPool(pool))
 }
 
 func normalizedPool(pool PoolConfig) PoolConfig {

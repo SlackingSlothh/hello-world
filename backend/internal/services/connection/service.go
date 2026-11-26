@@ -67,9 +67,6 @@ func (s Service) Remove(ctx context.Context, id string) error {
 	return nil
 }
 func (s Service) UpdatePool(ctx context.Context, id string, p manageddb.PoolConfig) (manageddb.Connection, error) {
-	if err := manageddb.ValidatePool(p); err != nil {
-		return manageddb.Connection{}, err
-	}
 	old, err := s.Registry.ConfigForStorage(id)
 	if err != nil {
 		return manageddb.Connection{}, err
@@ -82,6 +79,23 @@ func (s Service) UpdatePool(ctx context.Context, id string, p manageddb.PoolConf
 		}
 	}
 	view, err := s.Registry.UpdatePool(id, p)
+	if err != nil && s.Store != nil {
+		return manageddb.Connection{}, errors.Join(err, s.Store.Save(ctx, old))
+	}
+	return view, err
+}
+func (s Service) Replace(ctx context.Context, id string, c manageddb.Config) (manageddb.Connection, error) {
+	old, err := s.Registry.ConfigForStorage(id)
+	if err != nil {
+		return manageddb.Connection{}, err
+	}
+	c.ID = id
+	if s.Store != nil {
+		if err := s.Store.Save(ctx, c); err != nil {
+			return manageddb.Connection{}, err
+		}
+	}
+	view, err := s.Registry.Replace(ctx, id, c)
 	if err != nil && s.Store != nil {
 		return manageddb.Connection{}, errors.Join(err, s.Store.Save(ctx, old))
 	}

@@ -53,20 +53,15 @@ type pingConnector struct{}
 func (pingConnector) Connect(context.Context) (driver.Conn, error) { return pingConnection{}, nil }
 func (pingConnector) Driver() driver.Driver                        { return pingDriver{} }
 
-func TestAdminUpdatesOnlyConnectionPool(t *testing.T) {
+func TestAdminEditsConnection(t *testing.T) {
 	registry := manageddb.NewRegistryWithOpener(func(_ string, dsn string) (*sql.DB, error) {
-		if dsn != "old-secret" {
-			return nil, errors.New("unexpected DSN")
+		if dsn == "bad-secret" {
+			return nil, errors.New("cannot open bad-secret")
 		}
 		return sql.OpenDB(pingConnector{}), nil
 	})
 	defer registry.Close()
-	initial := manageddb.Config{
-		ID: "db1", Name: "Original", Driver: "postgres", DSN: "old-secret",
-		Pool: manageddb.PoolConfig{
-			MaxOpen: 5, MaxIdle: 2, MaxLifetimeSeconds: 60, MaxIdleTimeSeconds: 30,
-		},
-	}
+	initial := manageddb.Config{ID: "db1", Name: "Original", Driver: "postgres", DSN: "old-secret", Pool: manageddb.PoolConfig{MaxOpen: 5, MaxIdle: 2, MaxLifetimeSeconds: 60}}
 	if _, err := registry.Restore(initial); err != nil {
 		t.Fatal(err)
 	}
@@ -116,79 +111,52 @@ func TestAdminUpdatesOnlyConnectionPool(t *testing.T) {
 	}
 	path := "/api/v1/connections/db1"
 	request("GET", path+"/settings", "", "https://example.com", true, 200)
-	poolBody := `{"pool":{"maxOpen":8,"maxIdle":3,"maxLifetimeSeconds":120,"maxIdleTimeSeconds":15}}`
-	request("PATCH", path, poolBody, "https://example.com", true, 200)
-	view, err := registry.Get("db1")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !view.Connected || view.Name != "Original" || view.Pool.MaxOpen != 8 ||
-		view.Pool.MaxIdle != 3 || view.Pool.MaxLifetimeSeconds != 120 ||
-		view.Pool.MaxIdleTimeSeconds != 15 {
-		t.Fatalf("pool update changed identity or lost pool settings: %+v", view)
-	}
-	if store.saved.Name != "Original" || store.saved.Driver != "postgres" ||
-		store.saved.DSN != "old-secret" || store.saved.Pool.MaxOpen != 8 {
-		t.Fatalf("pool update changed stored connection identity: %+v", store.saved)
+	request("PATCH", path, `{"name":"Renamed","dsn":""}`, "https://example.com", true, 200)
+	if store.saved.Name != "Renamed" || store.saved.DSN != "old-secret" || store.saved.Pool.MaxOpen != 5 {
+		t.Fatal("rename changed omitted settings")
 	}
 	if err := registry.Disconnect("db1"); err != nil {
 		t.Fatal(err)
 	}
-	request("PATCH", path, `{"pool":{"maxOpen":6,"maxIdle":2,"maxLifetimeSeconds":90,"maxIdleTimeSeconds":20}}`, "https://example.com", true, 200)
-	view, err = registry.Get("db1")
-	if err != nil {
-		t.Fatal(err)
+	request("PATCH", path, `{"name":"Offline","pool":{"maxOpen":8,"maxIdle":3,"maxLifetimeSeconds":60}}`, "https://example.com", true, 200)
+	view, _ := registry.Get("db1")
+	if view.Connected || view.Name != "Offline" || view.Pool.MaxOpen != 8 || view.Pool.MaxLifetimeSeconds != 60 {
+		t.Fatal("metadata update changed connection state or lost settings")
 	}
-	if view.Connected || view.Name != "Original" || view.Pool.MaxOpen != 6 ||
-		view.Pool.MaxIdle != 2 || view.Pool.MaxLifetimeSeconds != 90 ||
-		view.Pool.MaxIdleTimeSeconds != 20 {
-		t.Fatalf("pool update changed disconnected connection state: %+v", view)
-	}
-	invalidUpdates := []string{
-		`{}`,
-		`{"pool":{}}`,
-		`{"pool":{"maxOpen":-1,"maxIdle":0,"maxLifetimeSeconds":0,"maxIdleTimeSeconds":0}}`,
-		`{"pool":{"maxOpen":2,"maxIdle":3,"maxLifetimeSeconds":0,"maxIdleTimeSeconds":0}}`,
-		`{"pool":{"maxOpen":4,"maxIdle":2,"maxLifetimeSeconds":60,"maxIdleTimeSeconds":10},"name":"Changed"}`,
-		`{"pool":{"maxOpen":4,"maxIdle":2,"maxLifetimeSeconds":60,"maxIdleTimeSeconds":10},"driver":"mysql"}`,
-		`{"pool":{"maxOpen":4,"maxIdle":2,"maxLifetimeSeconds":60,"maxIdleTimeSeconds":10},"dsn":"new-secret"}`,
-	}
-	for _, body := range invalidUpdates {
+	for _, body := range []string{`{}`, `{"name":" "}`, `{"pool":{"maxOpen":2,"maxIdle":3}}`, `{"driver":"mysql"}`} {
 		request("PATCH", path, body, "https://example.com", true, 400)
 	}
-	request("PATCH", path, `{"pool":{"maxOpen":4}}`, "https://example.com", true, 400)
-	request("PATCH", "/api/v1/connections/missing", poolBody, "https://example.com", true, 404)
-
-	store.failure = errors.New("store unavailable")
-	request("PATCH", path, poolBody, "https://example.com", true, 503)
-	view, err = registry.Get("db1")
-	if err != nil {
-		t.Fatal(err)
+	request("PATCH", path, `{"name":"Failed","dsn":"bad-secret"}`, "https://example.com", true, 502)
+	if store.saved.Name != "Offline" || store.saved.DSN != "old-secret" {
+		t.Fatal("failed verification changed saved settings")
 	}
-	if view.Name != "Original" || view.Connected || view.Pool.MaxOpen != 6 ||
-		store.saved.Pool.MaxOpen != 6 {
-		t.Fatal("failed persistence changed runtime or stored settings")
+	store.failure = errors.New("store unavailable")
+	request("PATCH", path, `{"name":"Unsaved","dsn":"new-secret"}`, "https://example.com", true, 503)
+	view, _ = registry.Get("db1")
+	if view.Name != "Offline" || view.Connected {
+		t.Fatal("failed persistence changed runtime settings")
 	}
 	store.failure = nil
-
+	request("PATCH", path, `{"name":"Replaced","dsn":"new-secret"}`, "https://example.com", true, 200)
+	view, _ = registry.Get("db1")
+	if !view.Connected || view.ID != "db1" || store.saved.DSN != "new-secret" || store.saved.Pool.MaxOpen != 8 {
+		t.Fatal("replacement lost ID, DSN or omitted pool")
+	}
 	restored := manageddb.NewRegistryWithOpener(func(string, string) (*sql.DB, error) { return sql.OpenDB(pingConnector{}), nil })
 	defer restored.Close()
 	reloaded := connectionapp.Service{Registry: restored, Store: store}
 	if err := reloaded.Restore(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	view, err = reloaded.Get("db1")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if view.Name != "Original" || view.Pool.MaxOpen != 6 ||
-		view.Pool.MaxLifetimeSeconds != 90 || view.Pool.MaxIdleTimeSeconds != 20 {
+	view, _ = reloaded.Get("db1")
+	if view.Name != "Replaced" || view.Pool.MaxOpen != 8 {
 		t.Fatal("saved changes did not survive restore")
 	}
-	request("PATCH", path, poolBody, "https://example.com", false, 401)
-	request("PATCH", path, poolBody, "https://other.example", true, 403)
+	request("PATCH", "/api/v1/connections/missing", `{"name":"Missing"}`, "https://example.com", true, 404)
+	request("PATCH", path, `{"name":"No session"}`, "https://example.com", false, 401)
+	request("PATCH", path, `{"name":"Wrong origin"}`, "https://other.example", true, 403)
 	access.admin = false
 	request("GET", "/api/v1/admin/connections", "", "https://example.com", true, 403)
 	request("GET", path+"/settings", "", "https://example.com", true, 403)
-	request("PATCH", path, poolBody, "https://example.com", true, 403)
+	request("PATCH", path, `{"name":"Not admin"}`, "https://example.com", true, 403)
 }
