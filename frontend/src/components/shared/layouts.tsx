@@ -11,7 +11,7 @@ function Shell({
   navigation,
   identity,
 }: LayoutProps & {
-  navigation: ReactNode;
+  navigation?: ReactNode;
   identity?: ReactNode;
 }) {
   return (
@@ -21,12 +21,14 @@ function Shell({
           <Link className="text-lg font-semibold tracking-tight" href="/">
             HelloWorld
           </Link>
-          <nav
-            aria-label="Main navigation"
-            className="flex flex-wrap items-center gap-2"
-          >
-            {navigation}
-          </nav>
+          {navigation ? (
+            <nav
+              aria-label="Main navigation"
+              className="flex flex-wrap items-center gap-2"
+            >
+              {navigation}
+            </nav>
+          ) : null}
           {identity}
         </div>
       </header>
@@ -48,11 +50,17 @@ function NavLink({ href, children }: LayoutProps & { href: string }) {
   );
 }
 
-export function PublicLayout({ children }: LayoutProps) {
-  return (
-    <Shell
-      navigation={<NavLink href="/login">Sign in</NavLink>}
-    >
+export function PublicLayout({
+  children,
+  authActions,
+  authNavigation,
+}: LayoutProps & { authActions?: ReactNode; authNavigation?: ReactNode }) {
+  return authActions ? (
+    <Shell identity={authActions} navigation={authNavigation}>
+      {children}
+    </Shell>
+  ) : (
+    <Shell navigation={<NavLink href="/login">Sign in</NavLink>}>
       {children}
     </Shell>
   );
@@ -65,7 +73,9 @@ export function AuthenticatedLayout({
 }: LayoutProps & { username: string; isAdmin: boolean }) {
   return (
     <Shell
-      identity={<AccountMenu isAdmin={isAdmin} mode="user" username={username} />}
+      identity={
+        <AccountMenu isAdmin={isAdmin} mode="user" username={username} />
+      }
       navigation={
         <>
           <NavLink href="/db">Databases</NavLink>
@@ -90,7 +100,6 @@ export function AdminLayout({
           <NavLink href="/admin/connections">Connections</NavLink>
           <NavLink href="/admin/groups">Groups</NavLink>
           <NavLink href="/admin/access">Access</NavLink>
-          <NavLink href="/migration">Migrations</NavLink>
         </>
       }
     >

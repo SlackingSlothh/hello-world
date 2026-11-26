@@ -2,7 +2,10 @@ import { NextRequest, NextResponse } from "next/server";
 import { backendAuthUrl } from "@/lib/server/backend-auth";
 
 const adminHeader = "x-datadock-admin";
+const authStateHeader = "x-datadock-auth-state";
 const usernameHeader = "x-datadock-username";
+
+type AuthState = "anonymous" | "authenticated" | "unavailable";
 
 async function checkBackendSession(
   request: NextRequest,
@@ -40,18 +43,62 @@ function copySessionCookie(response: NextResponse, backendResponse: Response) {
   if (cookie) response.headers.set("set-cookie", cookie);
 }
 
+function continueWithAuthState(
+  request: NextRequest,
+  state: AuthState,
+  sessionResponse?: Response,
+  adminResponse?: Response,
+  username?: string,
+): NextResponse {
+  const isPublicRoot = request.nextUrl.pathname === "/";
+  const forwardedHeaders = new Headers(request.headers);
+  forwardedHeaders.delete(adminHeader);
+  forwardedHeaders.delete(authStateHeader);
+  forwardedHeaders.delete(usernameHeader);
+  forwardedHeaders.set(authStateHeader, state);
+  forwardedHeaders.set(adminHeader, String(adminResponse?.status === 204));
+  if (username) forwardedHeaders.set(usernameHeader, username);
+
+  const response = NextResponse.next({
+    request: { headers: forwardedHeaders },
+  });
+  if (!isPublicRoot) {
+    response.headers.set("Cache-Control", "private, no-store");
+  }
+  if (adminResponse) copySessionCookie(response, adminResponse);
+  if (!response.headers.has("set-cookie") && sessionResponse) {
+    copySessionCookie(response, sessionResponse);
+  }
+  return response;
+}
+
 export async function proxy(request: NextRequest) {
+  const isPublicRoot = request.nextUrl.pathname === "/";
   const isAdminRoute =
     request.nextUrl.pathname === "/admin" ||
     request.nextUrl.pathname.startsWith("/admin/");
+  if (isPublicRoot && !request.cookies.get("session_id")?.value) {
+    return continueWithAuthState(request, "anonymous");
+  }
+
   let sessionResponse: Response;
   let adminResponse: Response;
   let username: string;
 
   try {
     sessionResponse = await checkBackendSession(request, "session");
-    if (sessionResponse.status === 401) return loginRedirect(request);
-    if (sessionResponse.status !== 200) return authUnavailable();
+    if (sessionResponse.status === 401) {
+      if (isPublicRoot) {
+        return continueWithAuthState(request, "anonymous", sessionResponse);
+      }
+      return loginRedirect(request);
+    }
+    if (sessionResponse.status !== 200) {
+      if (isPublicRoot) {
+        return continueWithAuthState(request, "unavailable", sessionResponse);
+      }
+      return authUnavailable();
+    }
 
     const profile: unknown = await sessionResponse.json();
     if (
@@ -61,18 +108,34 @@ export async function proxy(request: NextRequest) {
       typeof profile.username !== "string" ||
       profile.username.length === 0
     ) {
+      if (isPublicRoot) {
+        return continueWithAuthState(request, "unavailable", sessionResponse);
+      }
       return authUnavailable();
     }
     username = profile.username;
 
     adminResponse = await checkBackendSession(request, "admin-session");
   } catch (error) {
+    if (isPublicRoot) {
+      return continueWithAuthState(request, "unavailable");
+    }
     if (error instanceof TypeError) return authUnavailable();
     if (error instanceof SyntaxError) return authUnavailable();
     throw error;
   }
 
-  if (adminResponse.status === 401) return loginRedirect(request);
+  if (adminResponse.status === 401) {
+    if (isPublicRoot) {
+      return continueWithAuthState(
+        request,
+        "anonymous",
+        sessionResponse,
+        adminResponse,
+      );
+    }
+    return loginRedirect(request);
+  }
   if (isAdminRoute && adminResponse.status === 403) {
     const notFoundUrl = request.nextUrl.clone();
     notFoundUrl.pathname = "/_not-found";
@@ -86,24 +149,26 @@ export async function proxy(request: NextRequest) {
     adminResponse.status !== 204 &&
     !(adminResponse.status === 403 && !isAdminRoute)
   ) {
+    if (isPublicRoot) {
+      return continueWithAuthState(
+        request,
+        "unavailable",
+        sessionResponse,
+        adminResponse,
+      );
+    }
     return authUnavailable();
   }
 
-  const isAdmin = adminResponse.status === 204;
-  const forwardedHeaders = new Headers(request.headers);
-  forwardedHeaders.set(adminHeader, String(isAdmin));
-  forwardedHeaders.set(usernameHeader, username);
-  const response = NextResponse.next({
-    request: { headers: forwardedHeaders },
-  });
-  response.headers.set("Cache-Control", "private, no-store");
-  copySessionCookie(response, adminResponse);
-  if (!response.headers.has("set-cookie")) {
-    copySessionCookie(response, sessionResponse);
-  }
-  return response;
+  return continueWithAuthState(
+    request,
+    "authenticated",
+    sessionResponse,
+    adminResponse,
+    username,
+  );
 }
 
 export const config = {
-  matcher: ["/admin/:path*", "/db/:path*", "/migration/:path*"],
+  matcher: ["/", "/admin/:path*", "/db/:path*", "/migration/:path*"],
 };

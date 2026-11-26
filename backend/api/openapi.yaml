@@ -223,8 +223,8 @@ paths:
     patch:
       tags: [Connections]
       operationId: updateConnection
-      summary: Update connection settings
-      description: Admin-only. Replacement DSNs are verified before the active connection is swapped; failed replacement keeps old settings.
+      summary: Update connection pool settings
+      description: Admin-only. Updates only max open connections, max idle connections, maximum connection lifetime, and maximum idle time. The target database, credentials, and driver cannot be changed through this endpoint.
       x-required-permission: ManageConnections
       requestBody:
         required: true
@@ -240,7 +240,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/Connection"
         "400":
-          description: Invalid update.
+          description: Invalid pool settings.
           content:
             application/json:
               schema:
@@ -251,8 +251,6 @@ paths:
           $ref: "#/components/responses/Forbidden"
         "404":
           $ref: "#/components/responses/NotFound"
-        "502":
-          description: Replacement target could not be verified; previous settings remain active.
         "503":
           description: Could not save connection settings.
     delete:
@@ -1385,19 +1383,28 @@ components:
           $ref: "#/components/schemas/PoolConfig"
     ConnectionUpdate:
       type: object
-      minProperties: 1
+      additionalProperties: false
+      required: [pool]
       properties:
-        name:
-          type: string
-        driver:
-          type: string
-          enum: [postgres, postgresql, pgx, mysql, mariadb, maria]
-        dsn:
-          type: string
-          writeOnly: true
-          description: A new DSN is required when changing database engines.
         pool:
-          $ref: "#/components/schemas/PoolConfig"
+          $ref: "#/components/schemas/ConnectionPoolUpdate"
+    ConnectionPoolUpdate:
+      type: object
+      additionalProperties: false
+      required: [maxOpen, maxIdle, maxLifetimeSeconds, maxIdleTimeSeconds]
+      properties:
+        maxOpen:
+          type: integer
+          minimum: 0
+        maxIdle:
+          type: integer
+          minimum: 0
+        maxLifetimeSeconds:
+          type: integer
+          minimum: 0
+        maxIdleTimeSeconds:
+          type: integer
+          minimum: 0
     ConnectionOption:
       type: object
       required: [id, name, driver]

@@ -16,9 +16,9 @@ Never cache a response containing user or session data in a shared cache.
 | `/login`              | SSG shell                                                                   | CSR form submission, validation feedback, and safe `next` redirect handling                      | No user-specific page data                                             |
 | `/register`           | SSG shell                                                                   | CSR form submission and validation feedback                                                      | No user-specific page data                                             |
 | `/admin`              | SSR session/admin-mode guard and shell                                      | CSR mode switch and navigation                                                                   | Do not render admin content before authorization                       |
-| `/admin/connections`  | SSR admin guard and shell                                                   | CSR connection list, health/pool updates, and create/edit/test/connect/disconnect/delete actions | Frequently changing data and mutations                                 |
+| `/admin/connections`  | SSR admin guard and shell                                                   | CSR connection list, pool settings, and create/edit/connect/disconnect/delete actions           | Frequently changing data and mutations                                 |
 | `/admin/groups`       | SSR admin guard and shell                                                   | CSR group list, member picker, leader selection, and group mutations                             | Frequently changing data and mutations                                 |
-| `/admin/access`       | SSR admin guard and shell                                                   | CSR access matrix and grant/revoke actions                                                       | Access changes must take effect promptly                               |
+| `/admin/access`       | SSR admin guard and shell                                                   | CSR group-first connection search, grant-level changes, and revoke actions                       | Access changes must take effect promptly                               |
 | `/db`                 | SSR session guard and initial accessible-database list                      | CSR revalidation and status/review indicators                                                    | Fast first paint for private, per-user data                            |
 | `/db/{id}`            | SSR session guard and database shell; conceal unauthorized IDs as not found | CSR schema and query tabs; paginate large results                                                | Database browsing and read-only queries                                |
 | `/migration`          | SSR session guard and editable-database list                                 | CSR status/review indicators                                                                     | Only show databases where the user has view + edit access               |
@@ -64,9 +64,9 @@ browser-only state.
 | `LoginForm`, `RegisterForm`                    | CSR island in SSG shell             | Auth requests, field validation, session-expired and rate-limit messages                                          |
 | `AdminModeSwitcher`                            | CSR island                          | Switch between user and admin mode for eligible users                                                             |
 | `ConnectionList` / `ConnectionCard`            | CSR island in admin SSR shell       | Connection status, engine, pool stats, and connection actions                                                     |
-| `ConnectionForm`                               | CSR island in admin SSR shell       | Shared create/edit fields, test-before-save, and write-only password behavior                                     |
+| `ConnectionForm`                               | CSR island in admin SSR shell       | Create connection details; edit only the supported pool settings                                                  |
 | `GroupList`, `GroupEditor`, `MemberPicker`     | CSR island in admin SSR shell       | Group membership, exactly-one-leader selection, and group lifecycle actions                                       |
-| `AccessGrantMatrix`                            | CSR island in admin SSR shell       | Grant, change, and revoke group access with impact warnings                                                       |
+| `GroupAccessEditor`                            | CSR island in admin SSR shell       | Select a group, search/filter connections, and grant, change, or revoke access                                    |
 | `DatabaseList` / `DatabaseCard`                | SSR initial data + CSR revalidation | Accessible database list, access level, connection state, and review/job indicators                               |
 | `DatabaseWorkspaceShell`, `DatabaseTabs`       | SSR shell + CSR navigation          | Database title and Schema / Query navigation                                                                      |
 | `MigrationDatabaseList`                        | SSR initial data + CSR revalidation | Databases where the user can create and request migrations                                                        |
@@ -102,26 +102,35 @@ callbacks to the app's API/query layer; no component assumes a backend URL or
 silently substitutes mock data. Protected-route authorization remains the
 responsibility of the server route/layout, not these display components.
 
-## Pages and mock services
+## Pages and remaining mock data
 
 The App Router pages are implemented in `src/app/` for the landing page,
 login/register, admin home/connections/groups/access, database browsing, and
 the separate migration list and per-database workspace. The public landing
 content uses Next.js Cache Components with a one-hour revalidation lifetime.
-Protected route layouts call the mock session service so the routes can be
-explored before the Go API is connected.
 
-`src/lib/mock-data.ts` supplies typed in-memory data. Its generic
-`MockRepository<T>` base class is extended by connection, group, database,
-access-grant, migration, and user repositories; `MockAuthService` supplies a
-demo administrator. The pages pass mock data to the reusable components, and
-client controls demonstrate local state changes and notifications.
+Admin connections and access grants use live backend requests from
+`src/lib/api/admin.ts`, forwarded by
+`src/app/api/backend/[...path]/route.ts`. Group and member management use
+`src/lib/api/groups.ts` and the restricted
+`src/app/api/admin/access/[...path]/route.ts` proxy. Connection edits only send
+the four supported pool settings; connection identity and credentials remain
+unchanged. Access management uses a group-first searchable editor with
+client-side filtering and pagination.
 
-The demo-mode banner is intentional: login/register, permissions, and
-connection/migration actions are not real authentication or database
-operations. Replace the mock services and client callbacks with the API layer
-before deployment; the mock administrator must not be used as an authorization
-guard in production.
+The admin API calls are centralized and traceable:
+
+- Connections: `GET /admin/connections`, `POST /connections`,
+  `PATCH /connections/{id}` (pool only), `POST /connections/{id}/connect`,
+  `POST /connections/{id}/disconnect`, and `DELETE /connections/{id}`.
+- Access: `GET /access/groups` and `PUT`/`DELETE`
+  `/access/groups/{groupID}/connections/{connectionID}`.
+- Groups: see the request functions in `src/lib/api/groups.ts`; they use the
+  separate restricted proxy route above.
+
+`src/lib/mock-data.ts` continues to provide in-memory database and migration
+examples. Database browsing and migration workflows still contain mock data
+and actions; those are not real database operations.
 
 ## Page composition
 
@@ -130,9 +139,9 @@ guard in production.
 | `/`                   | `PublicLayout`, `PageHeader`, public feature sections                                                                     |
 | `/login`, `/register` | `PublicLayout`, `LoginForm` or `RegisterForm`                                                                             |
 | `/admin`              | `AdminLayout`, `AdminModeSwitcher`, admin destination cards                                                               |
-| `/admin/connections`  | `AdminLayout`, `ConnectionList`, `ConnectionForm`, shared status and feedback components                                  |
+| `/admin/connections`  | `AdminLayout`, `ConnectionList`, pool-only edit form, shared status and feedback components                                 |
 | `/admin/groups`       | `AdminLayout`, `GroupList`, `GroupEditor`, `MemberPicker`                                                                 |
-| `/admin/access`       | `AdminLayout`, `AccessGrantMatrix`                                                                                        |
+| `/admin/access`       | `AdminLayout`, `GroupAccessEditor`                                                                                         |
 | `/db`                 | `AuthenticatedLayout`, `DatabaseList`, `DatabaseCard`                                                                     |
 | `/db/{id}`            | `AuthenticatedLayout`, `DatabaseWorkspaceShell`, Schema and Query components                                             |
 | `/migration`          | `AuthenticatedLayout`, editable PostgreSQL `MigrationDatabaseList`                                                       |
