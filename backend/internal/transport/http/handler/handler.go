@@ -61,9 +61,11 @@ func (h *Handler) routes() {
 	h.mux.Handle("POST /api/v1/connections/{id}/test", connectionUser(authz.ReadSchema, h.testConnection))
 	h.mux.Handle("POST /api/v1/connections/{id}/connect", admin(h.connectConnection))
 	h.mux.Handle("POST /api/v1/connections/{id}/disconnect", admin(h.disconnectConnection))
+	h.mux.Handle("GET /api/v1/access/users", admin(h.listUsers))
 	h.mux.Handle("POST /api/v1/access/users", admin(h.createUser))
 	h.mux.Handle("GET /api/v1/access/groups", admin(h.listGroupAccess))
 	h.mux.Handle("POST /api/v1/access/groups", admin(h.createGroup))
+	h.mux.Handle("PUT /api/v1/access/groups/{groupID}/leader", admin(h.setGroupLeader))
 	h.mux.Handle("GET /api/v1/access/groups/{groupID}/members", admin(h.listGroupMembers))
 	h.mux.Handle("PUT /api/v1/access/groups/{groupID}/members/{userID}", admin(h.setGroupMember))
 	h.mux.Handle("DELETE /api/v1/access/groups/{groupID}/members/{userID}", admin(h.setGroupMember))
@@ -93,6 +95,7 @@ type connectionOption struct {
 }
 
 func (h *Handler) listGroupAccess(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
 	groups, err := h.access.List(r.Context())
 	if err != nil {
 		writeError(w, http.StatusServiceUnavailable, "access_unavailable", "could not load group access")

@@ -9,6 +9,16 @@ import (
 	accessapp "hello-world/internal/services/access"
 )
 
+func (h *Handler) listUsers(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	users, err := h.access.ListUsers(r.Context())
+	if err != nil {
+		writeError(w, http.StatusServiceUnavailable, "users_unavailable", "could not list users")
+		return
+	}
+	writeJSON(w, http.StatusOK, users)
+}
+
 func (h *Handler) createUser(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	if r.URL.RawQuery != "" || r.URL.ForceQuery {

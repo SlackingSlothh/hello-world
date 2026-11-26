@@ -27,6 +27,10 @@ type userStore struct {
 	calls   int
 }
 
+func (s *userStore) ListUsers(_ context.Context) ([]accessapp.User, error) {
+	return nil, s.failure
+}
+
 func (s *userStore) CreateUser(_ context.Context, user accessapp.User, hash string) error {
 	s.calls++
 	if s.failure != nil {
