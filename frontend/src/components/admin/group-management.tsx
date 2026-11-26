@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { XIcon } from "lucide-react";
 import { toast } from "sonner";
 import {
   GroupEditor,
@@ -167,7 +168,23 @@ export function GroupManagement() {
       )}
       {editor?.mode === "manage" && group && (
         <Card>
-          <CardHeader><CardTitle>Manage {group.name}</CardTitle></CardHeader>
+          <CardHeader className="relative">
+            <div className="pr-10">
+              <CardTitle>Manage {group.name}</CardTitle>
+            </div>
+            <Button
+              aria-label={`Close management for ${group.name}`}
+              className="absolute right-4 top-3"
+              onClick={() => {
+                setEditor(null);
+                setActionError("");
+              }}
+              size="icon-sm"
+              variant="ghost"
+            >
+              <XIcon aria-hidden="true" />
+            </Button>
+          </CardHeader>
           <CardContent>
             <fieldset className="space-y-5" disabled={busy}>
               <legend className="sr-only">Manage {group.name}</legend>

@@ -10,7 +10,10 @@ import {
 } from "@/components/ui/card";
 import { PublicLayout } from "@/components/shared/layouts";
 import { PageHeader } from "@/components/shared/page-header";
-import { RootAuthActions } from "@/components/auth/root-auth-actions";
+import {
+  RootAuthActions,
+  RootUserNavigation,
+} from "@/components/auth/root-auth-actions";
 
 const features = [
   {
@@ -72,6 +75,11 @@ async function LandingContent() {
 export default function HomePage() {
   return (
     <PublicLayout
+      authNavigation={
+        <Suspense fallback={null}>
+          <RootUserNavigation />
+        </Suspense>
+      }
       authActions={
         <Suspense fallback={<span aria-hidden="true" className="h-9 w-20" />}>
           <RootAuthActions placement="header" />
