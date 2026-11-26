@@ -20,9 +20,9 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import {
-  AccessGrantMatrix,
   ConnectionForm,
   ConnectionList,
+  GroupAccessEditor,
   GroupEditor,
   GroupList,
   type AccessGrant,
@@ -652,7 +652,7 @@ export function GroupManagement() {
 export function AccessManagement() {
   const [groups, setGroups] = useState<Array<{ id: string; name: string }>>([]);
   const [connections, setConnections] = useState<
-    Array<{ id: string; name: string }>
+    Array<{ id: string; name: string; driver: string }>
   >([]);
   const [grants, setGrants] = useState<AccessGrant[]>([]);
   const [loading, setLoading] = useState(true);
@@ -664,7 +664,11 @@ export function AccessManagement() {
     const data = await listGroupAccess();
     return {
       groups: data.groups.map(({ id, name }) => ({ id, name })),
-      connections: data.connections.map(({ id, name }) => ({ id, name })),
+      connections: data.connections.map(({ id, name, driver }) => ({
+        id,
+        name,
+        driver,
+      })),
       grants: data.groups.flatMap((group) =>
         group.grants.map((grant) => ({
           id: `${grant.groupId}:${grant.databaseId}`,
@@ -743,7 +747,7 @@ export function AccessManagement() {
   return (
     <div className="space-y-5">
       <PageHeader
-        description="Set each group's database access to none, read, or write."
+        description="Choose a group, then search and manage access to its database connections."
         title="Group access"
       />
       {actionError ? (
@@ -755,7 +759,7 @@ export function AccessManagement() {
       {loading ? (
         <LoadingState label="Loading group access" />
       ) : loadError ? null : (
-        <AccessGrantMatrix
+        <GroupAccessEditor
           connections={connections}
           disabled={Boolean(pendingGrant)}
           grants={grants}

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, type FormEvent, type ReactNode } from "react";
+import { useMemo, useState, type FormEvent, type ReactNode } from "react";
 import { Search, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -9,6 +9,7 @@ import {
   DataTable,
   type DataTableColumn,
 } from "@/components/shared/data-table";
+import { PaginationControls } from "@/components/shared/pagination-controls";
 import { EmptyState } from "@/components/shared/async-states";
 import { AccessBadge, StatusBadge } from "@/components/shared/status-badge";
 
@@ -477,7 +478,7 @@ export type AccessGrant = {
   level: "view" | "view_edit" | null;
 };
 
-export function AccessGrantMatrix({
+export function GroupAccessEditor({
   groups,
   connections,
   grants,
@@ -485,7 +486,7 @@ export function AccessGrantMatrix({
   disabled = false,
 }: {
   groups: Array<{ id: string; name: string }>;
-  connections: Array<{ id: string; name: string }>;
+  connections: Array<{ id: string; name: string; driver: string }>;
   grants: AccessGrant[];
   onChange: (
     groupId: string,
@@ -494,81 +495,168 @@ export function AccessGrantMatrix({
   ) => void;
   disabled?: boolean;
 }) {
-  const levelFor = (groupId: string, connectionId: string) =>
-    grants.find(
-      (grant) =>
-        grant.groupId === groupId && grant.connectionId === connectionId,
-    )?.level ?? "";
+  const [selectedGroupId, setSelectedGroupId] = useState("");
+  const [search, setSearch] = useState("");
+  const [grantedOnly, setGrantedOnly] = useState(false);
+  const [page, setPage] = useState(1);
+  const pageSize = 10;
+  const selectedGroup =
+    groups.find((group) => group.id === selectedGroupId) ?? groups[0];
+  const selectedGrants = useMemo(
+    () =>
+      new Map(
+        grants
+          .filter((grant) => grant.groupId === selectedGroup?.id)
+          .map((grant) => [grant.connectionId, grant.level]),
+      ),
+    [grants, selectedGroup?.id],
+  );
+  const grantedCount = selectedGrants.size;
+  const normalizedSearch = search.trim().toLocaleLowerCase();
+  const filteredConnections = connections.filter((connection) => {
+    const matchesSearch =
+      normalizedSearch.length === 0 ||
+      connection.name.toLocaleLowerCase().includes(normalizedSearch) ||
+      connection.driver.toLocaleLowerCase().includes(normalizedSearch);
+    const matchesGrantFilter =
+      !grantedOnly || selectedGrants.has(connection.id);
+    return matchesSearch && matchesGrantFilter;
+  });
+  const pageCount = Math.max(1, Math.ceil(filteredConnections.length / pageSize));
+  const currentPage = Math.min(page, pageCount);
+  const visibleConnections = filteredConnections.slice(
+    (currentPage - 1) * pageSize,
+    currentPage * pageSize,
+  );
 
-  if (groups.length === 0 || connections.length === 0) {
+  if (groups.length === 0 || connections.length === 0 || !selectedGroup) {
     return (
       <EmptyState
         description="Create at least one group and one connection before assigning access."
-        title="Access matrix is empty"
+        title="No access grants available"
       />
     );
   }
 
   return (
-    <div className="w-full overflow-x-auto rounded-lg border bg-background">
-      <table className="w-full min-w-160 text-sm">
-        <thead>
-          <tr className="border-b bg-muted/50">
-            <th className="p-3 text-left font-medium">Group</th>
-            {connections.map((connection) => (
-              <th className="p-3 text-left font-medium" key={connection.id}>
-                {connection.name}
-              </th>
+    <div className="space-y-4">
+      <div className="grid gap-4 sm:grid-cols-2">
+        <label className="space-y-2 text-sm font-medium">
+          Group
+          <select
+            className="h-9 w-full rounded-md border bg-background px-3 text-sm"
+            disabled={disabled}
+            onChange={(event) => {
+              setSelectedGroupId(event.target.value);
+              setPage(1);
+            }}
+            value={selectedGroup?.id ?? ""}
+          >
+            {groups.map((group) => (
+              <option key={group.id} value={group.id}>
+                {group.name}
+              </option>
             ))}
-          </tr>
-        </thead>
-        <tbody>
-          {groups.map((group) => (
-            <tr className="border-b last:border-0" key={group.id}>
-              <th className="p-3 text-left font-medium">{group.name}</th>
-              {connections.map((connection) => {
-                const level = levelFor(group.id, connection.id);
-                return (
-                  <td className="p-3" key={connection.id}>
-                    <label
-                      className="sr-only"
-                      htmlFor={`grant-${group.id}-${connection.id}`}
-                    >
-                      {group.name} access to {connection.name}
-                    </label>
-                    <select
-                      className="h-9 w-full min-w-32 rounded-md border bg-background px-2"
-                      disabled={disabled}
-                      id={`grant-${group.id}-${connection.id}`}
-                      onChange={(event) =>
-                        onChange(
-                          group.id,
-                          connection.id,
-                          event.target.value === "view"
-                            ? "view"
-                            : event.target.value === "view_edit"
-                              ? "view_edit"
-                              : null,
-                        )
-                      }
-                      value={level}
-                    >
-                      <option value="">No access</option>
-                      <option value="view">View</option>
-                      <option value="view_edit">View + Edit</option>
-                    </select>
+          </select>
+        </label>
+        <label className="space-y-2 text-sm font-medium">
+          Search connections
+          <Input
+            onChange={(event) => {
+              setSearch(event.target.value);
+              setPage(1);
+            }}
+            placeholder="Search by name or database type"
+            type="search"
+            value={search}
+          />
+        </label>
+      </div>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <label className="flex items-center gap-2 text-sm">
+          <input
+            checked={grantedOnly}
+            disabled={disabled}
+            onChange={(event) => {
+              setGrantedOnly(event.target.checked);
+              setPage(1);
+            }}
+            type="checkbox"
+          />
+          Show only connections with access
+        </label>
+        <p className="text-sm text-muted-foreground" aria-live="polite">
+          {grantedCount} of {connections.length} connections have access for{" "}
+          {selectedGroup.name}
+        </p>
+      </div>
+      {visibleConnections.length > 0 ? (
+        <ul className="divide-y rounded-lg border bg-background">
+          {visibleConnections.map((connection) => {
+            const level = selectedGrants.get(connection.id) ?? null;
+            const controlId = `grant-${selectedGroup.id}-${connection.id}`;
+            return (
+              <li
+                className="flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:justify-between"
+                key={connection.id}
+              >
+                <div className="min-w-0">
+                  <p className="truncate font-medium">{connection.name}</p>
+                  <p className="text-sm text-muted-foreground">
+                    {connection.driver}
                     {level ? (
-                      <span className="sr-only">
-                        Current level: <AccessBadge level={level} />
-                      </span>
-                    ) : null}
-                  </td>
-                );
-              })}
-            </tr>
-          ))}
-        </tbody>
-      </table>
+                      <>
+                        {" · "}
+                        <AccessBadge level={level} />
+                      </>
+                    ) : (
+                      " · No access"
+                    )}
+                  </p>
+                </div>
+                <label className="sr-only" htmlFor={controlId}>
+                  {selectedGroup.name} access to {connection.name}
+                </label>
+                <select
+                  className="h-9 w-full rounded-md border bg-background px-2 sm:w-44"
+                  disabled={disabled}
+                  id={controlId}
+                  onChange={(event) =>
+                    onChange(
+                      selectedGroup.id,
+                      connection.id,
+                      event.target.value === "view"
+                        ? "view"
+                        : event.target.value === "view_edit"
+                          ? "view_edit"
+                          : null,
+                    )
+                  }
+                  value={level ?? ""}
+                >
+                  <option value="">No access</option>
+                  <option value="view">View</option>
+                  <option value="view_edit">View + Edit</option>
+                </select>
+              </li>
+            );
+          })}
+        </ul>
+      ) : (
+        <EmptyState
+          description="Try a different search, or turn off the granted-only filter."
+          title="No connections match"
+        />
+      )}
+      {filteredConnections.length > pageSize ? (
+        <PaginationControls
+          disabled={disabled}
+          onPageChange={setPage}
+          page={currentPage}
+          pageSize={pageSize}
+          total={filteredConnections.length}
+        />
+      ) : null}
     </div>
   );
 }
