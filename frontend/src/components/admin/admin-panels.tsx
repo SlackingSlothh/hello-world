@@ -315,12 +315,12 @@ export type GroupSummary = {
 
 export function GroupList({
   groups,
+  busy,
   onEdit,
-  onDelete,
 }: {
   groups: GroupSummary[];
-  onEdit?: (group: GroupSummary) => void;
-  onDelete?: (group: GroupSummary) => void;
+  busy: boolean;
+  onEdit: (group: GroupSummary) => void;
 }) {
   const columns: DataTableColumn<GroupSummary>[] = [
     { id: "name", header: "Group", cell: (group) => group.name },
@@ -330,22 +330,11 @@ export function GroupList({
       id: "actions",
       header: "Actions",
       cell: (group) => (
-        <div className="flex gap-2">
-          {onEdit ? (
-            <Button onClick={() => onEdit(group)} size="sm" variant="outline">
-              Manage
-            </Button>
-          ) : null}
-          {onDelete && !group.system ? (
-            <Button
-              aria-label={`Delete ${group.name}`}
-              onClick={() => onDelete(group)}
-              size="icon-sm"
-              variant="destructive"
-            >
-              <Trash2 aria-hidden="true" />
-            </Button>
-          ) : group.system ? (
+        <div className="flex items-center gap-2">
+          <Button disabled={busy} onClick={() => onEdit(group)} size="sm" variant="outline">
+            Manage
+          </Button>
+          {group.system ? (
             <span className="text-xs text-muted-foreground">System group</span>
           ) : null}
         </div>
@@ -422,6 +411,34 @@ export function MemberPicker({
   );
 }
 
+export function GroupLeaderSelect({
+  members,
+  leaderId,
+  onLeaderChange,
+}: {
+  members: MemberOption[];
+  leaderId: string;
+  onLeaderChange: (id: string) => void;
+}) {
+  return (
+    <label className="block space-y-2 text-sm font-medium">
+      Group leader
+      <select
+        className="h-9 w-full rounded-md border bg-background px-3 text-sm"
+        disabled={members.length === 0}
+        onChange={(event) => onLeaderChange(event.target.value)}
+        required
+        value={leaderId}
+      >
+        <option value="">Choose an active member</option>
+        {members.map((member) => (
+          <option key={member.id} value={member.id}>{member.label}</option>
+        ))}
+      </select>
+    </label>
+  );
+}
+
 export function GroupEditor({
   name,
   members,
@@ -434,7 +451,7 @@ export function GroupEditor({
   onSubmit,
 }: {
   name: string;
-  members: MemberOption[];
+  members: (MemberOption & { active: boolean })[];
   selectedMemberIds: string[];
   leaderId: string;
   busy?: boolean;
@@ -443,8 +460,8 @@ export function GroupEditor({
   onLeaderChange: (id: string) => void;
   onSubmit: () => void;
 }) {
-  const selectedMembers = members.filter((member) =>
-    selectedMemberIds.includes(member.id),
+  const eligibleLeaders = members.filter((member) =>
+    member.active && selectedMemberIds.includes(member.id),
   );
   return (
     <form
@@ -454,46 +471,33 @@ export function GroupEditor({
         onSubmit();
       }}
     >
-      <div className="space-y-2">
-        <Label htmlFor="group-name">Group name</Label>
-        <Input
-          id="group-name"
-          onChange={(event) => onNameChange(event.target.value)}
-          required
-          value={name}
+      <fieldset className="space-y-5" disabled={busy}>
+        <div className="space-y-2">
+          <Label htmlFor="group-name">Group name</Label>
+          <Input
+            id="group-name"
+            onChange={(event) => onNameChange(event.target.value)}
+            required
+            value={name}
+          />
+        </div>
+        <MemberPicker
+          members={members}
+          onSelectionChange={onMembersChange}
+          selectedIds={selectedMemberIds}
         />
-      </div>
-      <MemberPicker
-        members={members}
-        onSelectionChange={onMembersChange}
-        selectedIds={selectedMemberIds}
-      />
-      <label className="block space-y-2 text-sm font-medium">
-        Group leader
-        <select
-          className="h-9 w-full rounded-md border bg-background px-3 text-sm"
-          onChange={(event) => onLeaderChange(event.target.value)}
-          required
-          value={leaderId}
+        <GroupLeaderSelect
+          leaderId={leaderId}
+          members={eligibleLeaders}
+          onLeaderChange={onLeaderChange}
+        />
+        <Button
+          disabled={busy || !name.trim() || !eligibleLeaders.some((member) => member.id === leaderId)}
+          type="submit"
         >
-          <option value="">Choose a member</option>
-          {selectedMembers.map((member) => (
-            <option key={member.id} value={member.id}>
-              {member.label}
-            </option>
-          ))}
-        </select>
-      </label>
-      <Button
-        disabled={
-          busy ||
-          selectedMembers.length === 0 ||
-          !selectedMemberIds.includes(leaderId)
-        }
-        type="submit"
-      >
-        {busy ? "Saving…" : "Save group"}
-      </Button>
+          {busy ? "Saving…" : "Create group"}
+        </Button>
+      </fieldset>
     </form>
   );
 }

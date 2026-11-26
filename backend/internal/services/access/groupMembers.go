@@ -3,10 +3,12 @@ package access
 import (
 	"context"
 	"errors"
+	"strings"
 )
 
 var ErrMemberNotFound = errors.New("group or user not found")
 var ErrInvalidMembership = errors.New("group and user IDs are required")
+var ErrLeaderMembership = errors.New("appoint another leader before removing the current leader")
 
 type GroupMember struct {
 	User
@@ -16,6 +18,7 @@ type GroupMember struct {
 type MembershipStore interface {
 	ListGroupMembers(context.Context, string) ([]GroupMember, error)
 	SetGroupMember(context.Context, string, string, bool) error
+	SetGroupLeader(context.Context, string, string) error
 }
 
 func (s Service) ListGroupMembers(ctx context.Context, groupID string) ([]GroupMember, error) {
@@ -36,4 +39,14 @@ func (s Service) SetGroupMember(ctx context.Context, groupID, userID string, mem
 		return errors.New("membership store is unavailable")
 	}
 	return s.Memberships.SetGroupMember(ctx, groupID, userID, member)
+}
+
+func (s Service) SetGroupLeader(ctx context.Context, groupID, leaderID string) error {
+	if strings.TrimSpace(leaderID) == "" {
+		return ErrInvalidGroupLeader
+	}
+	if s.Memberships == nil {
+		return errors.New("membership store is unavailable")
+	}
+	return s.Memberships.SetGroupLeader(ctx, groupID, leaderID)
 }

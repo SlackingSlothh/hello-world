@@ -23,6 +23,14 @@ type User struct {
 
 type UserStore interface {
 	CreateUser(context.Context, User, string) error
+	ListUsers(context.Context) ([]User, error)
+}
+
+func (s Service) ListUsers(ctx context.Context) ([]User, error) {
+	if s.Users == nil {
+		return nil, errors.New("user store is unavailable")
+	}
+	return s.Users.ListUsers(ctx)
 }
 
 func (s Service) CreateUser(ctx context.Context, username, password string) (User, error) {

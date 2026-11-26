@@ -31,9 +31,9 @@ func NewAuthStore(db *sql.DB) (*AuthStore, error) {
 	return &AuthStore{db: db}, nil
 }
 
-// SeedAccount inserts a bootstrap account, its dedicated group, and their
-// membership. Existing account passwords and active flags are preserved so
-// restarts do not overwrite credential changes or disabled accounts.
+// SeedAccount inserts a bootstrap account and its dedicated group, with the
+// account as the initial leader of a new group. Restarts preserve existing
+// credentials, active flags, and leader assignments.
 func (s *AuthStore) SeedAccount(ctx context.Context, seed SeedAccount) error {
 	if seed.ID == "" || seed.Username == "" || seed.PasswordHash == "" || seed.GroupID == "" || seed.GroupName == "" {
 		return errors.New("seed account fields are required")
@@ -55,14 +55,16 @@ func (s *AuthStore) SeedAccount(ctx context.Context, seed SeedAccount) error {
 	if username != seed.Username {
 		return fmt.Errorf("seed account ID %s is already assigned to another username", seed.ID)
 	}
-	_, err = tx.ExecContext(ctx, `INSERT INTO access_groups(id,name,is_admin) VALUES($1,$2,$3)
+	_, err = tx.ExecContext(ctx, `INSERT INTO access_groups(id,name,is_admin,leader_user_id) VALUES($1,$2,$3,$4)
 		ON CONFLICT(id) DO UPDATE SET is_admin=EXCLUDED.is_admin
-		WHERE access_groups.name=EXCLUDED.name`, seed.GroupID, seed.GroupName, seed.GroupIsAdmin)
+		WHERE access_groups.name=EXCLUDED.name`, seed.GroupID, seed.GroupName, seed.GroupIsAdmin, seed.ID)
 	if err != nil {
 		return fmt.Errorf("seed account group %s: %w", seed.GroupID, err)
 	}
 	var groupName string
-	if err := tx.QueryRowContext(ctx, `SELECT name FROM access_groups WHERE id=$1`, seed.GroupID).Scan(&groupName); err != nil {
+	var seedIsLeader bool
+	if err := tx.QueryRowContext(ctx, `SELECT name,COALESCE(leader_user_id=$2,FALSE) FROM access_groups WHERE id=$1`,
+		seed.GroupID, seed.ID).Scan(&groupName, &seedIsLeader); err != nil {
 		return fmt.Errorf("verify seeded group %s: %w", seed.GroupID, err)
 	}
 	if groupName != seed.GroupName {
@@ -72,7 +74,7 @@ func (s *AuthStore) SeedAccount(ctx context.Context, seed SeedAccount) error {
 	if err != nil {
 		return err
 	}
-	if count > 0 {
+	if count > 0 || seedIsLeader {
 		if _, err := tx.ExecContext(ctx, `INSERT INTO user_group_memberships(user_id,group_id) VALUES($1,$2) ON CONFLICT DO NOTHING`, seed.ID, seed.GroupID); err != nil {
 			return fmt.Errorf("assign seeded account %s to group: %w", seed.ID, err)
 		}

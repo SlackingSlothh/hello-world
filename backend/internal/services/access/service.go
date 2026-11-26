@@ -21,10 +21,12 @@ type Grant struct {
 }
 
 type Group struct {
-	ID      string  `json:"id"`
-	Name    string  `json:"name"`
-	IsAdmin bool    `json:"isAdmin"`
-	Grants  []Grant `json:"grants"`
+	ID          string  `json:"id"`
+	Name        string  `json:"name"`
+	IsAdmin     bool    `json:"isAdmin"`
+	LeaderID    *string `json:"leaderId"`
+	MemberCount int     `json:"memberCount"`
+	Grants      []Grant `json:"grants"`
 }
 
 type Store interface {
