@@ -25,7 +25,7 @@ type groupStore struct {
 	calls   int
 }
 
-func (s *groupStore) CreateGroup(_ context.Context, group accessapp.Group) error {
+func (s *groupStore) CreateGroup(_ context.Context, group accessapp.Group, _ []string) error {
 	s.calls++
 	if s.failure != nil {
 		return s.failure
@@ -65,16 +65,19 @@ func TestAdminAddsGroup(t *testing.T) {
 		failure       error
 		status        int
 	}{
-		{name: "admin creates group", body: `{"name":"  Data analysts  "}`, admin: true, authenticated: true, origin: "https://example.com", status: 201},
-		{name: "duplicate name", body: `{"name":"Data analysts"}`, admin: true, authenticated: true, origin: "https://example.com", status: 409},
-		{name: "empty name", body: `{"name":"   "}`, admin: true, authenticated: true, origin: "https://example.com", status: 400},
-		{name: "long name", body: `{"name":"` + strings.Repeat("a", 101) + `"}`, admin: true, authenticated: true, origin: "https://example.com", status: 400},
+		{name: "admin creates group", body: `{"name":"  Data analysts  ","memberIds":["alice","bob"],"leaderId":"alice"}`, admin: true, authenticated: true, origin: "https://example.com", status: 201},
+		{name: "duplicate name", body: `{"name":"Data analysts","memberIds":["alice"],"leaderId":"alice"}`, admin: true, authenticated: true, origin: "https://example.com", status: 409},
+		{name: "empty name", body: `{"name":"   ","memberIds":["alice"],"leaderId":"alice"}`, admin: true, authenticated: true, origin: "https://example.com", status: 400},
+		{name: "long name", body: `{"name":"` + strings.Repeat("a", 101) + `","memberIds":["alice"],"leaderId":"alice"}`, admin: true, authenticated: true, origin: "https://example.com", status: 400},
+		{name: "missing leader", body: `{"name":"Guests","memberIds":["alice"]}`, admin: true, authenticated: true, origin: "https://example.com", status: 400},
+		{name: "leader outside members", body: `{"name":"Guests","memberIds":["alice"],"leaderId":"bob"}`, admin: true, authenticated: true, origin: "https://example.com", status: 400},
+		{name: "duplicate members", body: `{"name":"Guests","memberIds":["alice","alice"],"leaderId":"alice"}`, admin: true, authenticated: true, origin: "https://example.com", status: 400},
 		{name: "invalid JSON", body: `{`, admin: true, authenticated: true, origin: "https://example.com", status: 400},
 		{name: "cannot create admin group", body: `{"name":"Admins","isAdmin":true}`, admin: true, authenticated: true, origin: "https://example.com", status: 400},
 		{name: "ordinary user denied", body: `{"name":"Guests"}`, authenticated: true, origin: "https://example.com", status: 403},
 		{name: "missing session", body: `{"name":"Guests"}`, admin: true, origin: "https://example.com", status: 401},
 		{name: "cross origin denied", body: `{"name":"Guests"}`, admin: true, authenticated: true, origin: "https://other.example", status: 403},
-		{name: "storage unavailable", body: `{"name":"Guests"}`, admin: true, authenticated: true, origin: "https://example.com", failure: errors.New("storage failure"), status: 503},
+		{name: "storage unavailable", body: `{"name":"Guests","memberIds":["alice"],"leaderId":"alice"}`, admin: true, authenticated: true, origin: "https://example.com", failure: errors.New("storage failure"), status: 503},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			access.admin = tc.admin
@@ -97,6 +100,12 @@ func TestAdminAddsGroup(t *testing.T) {
 				}
 			}
 			if tc.status == 201 {
+				var payload struct {
+					LeaderID string `json:"leaderId"`
+				}
+				if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil || payload.LeaderID != "alice" {
+					t.Fatalf("missing leader in response: %s", response.Body.String())
+				}
 				var group accessapp.Group
 				if err := json.Unmarshal(response.Body.Bytes(), &group); err != nil {
 					t.Fatal(err)

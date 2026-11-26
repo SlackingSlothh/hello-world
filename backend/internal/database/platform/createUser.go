@@ -22,3 +22,20 @@ func (s *AuthStore) CreateUser(ctx context.Context, user accessapp.User, passwor
 	}
 	return nil
 }
+
+func (s *AuthStore) ListUsers(ctx context.Context) ([]accessapp.User, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT id,username,active FROM platform_users ORDER BY username,id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	users := make([]accessapp.User, 0)
+	for rows.Next() {
+		var user accessapp.User
+		if err := rows.Scan(&user.ID, &user.Username, &user.Active); err != nil {
+			return nil, err
+		}
+		users = append(users, user)
+	}
+	return users, rows.Err()
+}

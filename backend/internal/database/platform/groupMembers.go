@@ -40,13 +40,14 @@ func (s *AuthStore) SetGroupMember(ctx context.Context, groupID, userID string, 
 		return err
 	}
 	defer tx.Rollback()
-	var id string
-	if err := tx.QueryRowContext(ctx, `SELECT id FROM access_groups WHERE id=$1 FOR UPDATE`, groupID).Scan(&id); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return accessapp.ErrMemberNotFound
-		}
+	leaderID, err := lockGroupLeader(ctx, tx, groupID)
+	if err != nil {
 		return err
 	}
+	if !member && leaderID != nil && *leaderID == userID {
+		return accessapp.ErrLeaderMembership
+	}
+	var id string
 	if err := tx.QueryRowContext(ctx, `SELECT id FROM platform_users WHERE id=$1 FOR UPDATE`, userID).Scan(&id); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return accessapp.ErrMemberNotFound
@@ -77,4 +78,32 @@ func (s *AuthStore) SetGroupMember(ctx context.Context, groupID, userID string, 
 		}
 	}
 	return tx.Commit()
+}
+
+func (s *AuthStore) SetGroupLeader(ctx context.Context, groupID, leaderID string) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := lockGroupLeader(ctx, tx, groupID); err != nil {
+		return err
+	}
+	if err := validateGroupLeader(ctx, tx, groupID, leaderID); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE access_groups SET leader_user_id=$2 WHERE id=$1`, groupID, leaderID); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// Transfer and removal lock the group before inspecting membership.
+func lockGroupLeader(ctx context.Context, tx *sql.Tx, groupID string) (*string, error) {
+	var leaderID *string
+	err := tx.QueryRowContext(ctx, `SELECT leader_user_id FROM access_groups WHERE id=$1 FOR UPDATE`, groupID).Scan(&leaderID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, accessapp.ErrMemberNotFound
+	}
+	return leaderID, err
 }

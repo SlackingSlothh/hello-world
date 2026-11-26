@@ -10,7 +10,7 @@ import (
 )
 
 func (s *AuthStore) ListGroupAccess(ctx context.Context) ([]accessapp.Group, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT g.id,g.name,g.is_admin,cg.database_id,cg.access_level
+	rows, err := s.db.QueryContext(ctx, `SELECT g.id,g.name,g.is_admin,g.leader_user_id,cg.database_id,cg.access_level
 		FROM access_groups g LEFT JOIN connection_grants cg ON cg.group_id=g.id
 		ORDER BY g.name,g.id,cg.database_id`)
 	if err != nil {
@@ -23,16 +23,17 @@ func (s *AuthStore) ListGroupAccess(ctx context.Context) ([]accessapp.Group, err
 	for rows.Next() {
 		var id, name string
 		var isAdmin bool
+		var leaderID *string
 		var databaseID sql.NullString
 		var level sql.NullInt64
-		if err := rows.Scan(&id, &name, &isAdmin, &databaseID, &level); err != nil {
+		if err := rows.Scan(&id, &name, &isAdmin, &leaderID, &databaseID, &level); err != nil {
 			return nil, fmt.Errorf("scan group access: %w", err)
 		}
 		index, exists := indices[id]
 		if !exists {
 			index = len(groups)
 			indices[id] = index
-			groups = append(groups, accessapp.Group{ID: id, Name: name, IsAdmin: isAdmin, Grants: []accessapp.Grant{}})
+			groups = append(groups, accessapp.Group{ID: id, Name: name, IsAdmin: isAdmin, LeaderID: leaderID, Grants: []accessapp.Grant{}})
 		}
 		if databaseID.Valid {
 			if authz.AccessLevel(level.Int64) == authz.NoAccess {
