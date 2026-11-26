@@ -2,6 +2,7 @@ import { z } from "zod";
 import type {
   AccessGrant,
   ConnectionFormValues,
+  ConnectionPoolValues,
   ConnectionSummary,
   MemberOption,
 } from "@/components/admin/admin-panels";
@@ -206,7 +207,7 @@ export function buildConnectionDsn(values: ConnectionFormValues): string {
   return `${escapeDsnPart(values.username)}:${escapeDsnPart(values.password)}@tcp(${host}:${values.port})/${escapeDsnPart(values.database)}?${query}`;
 }
 
-function poolFromForm(values: ConnectionFormValues) {
+function poolFromForm(values: ConnectionPoolValues) {
   return {
     maxOpen: values.maxOpenConnections,
     maxIdle: values.maxIdleConnections,
@@ -254,19 +255,14 @@ export async function getConnectionSettings(
 
 export async function updateConnection(
   id: string,
-  values: ConnectionFormValues,
+  values: ConnectionPoolValues,
 ): Promise<ConnectionSummary> {
   const connection = await requestJson(
     `/connections/${encodePath(id)}`,
     connectionSchema,
     {
       method: "PATCH",
-      body: jsonBody({
-        name: values.name,
-        driver: values.engine,
-        dsn: buildConnectionDsn(values),
-        pool: poolFromForm(values),
-      }),
+      body: jsonBody({ pool: poolFromForm(values) }),
     },
   );
   return connectionSummary(connection);

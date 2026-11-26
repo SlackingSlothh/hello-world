@@ -185,24 +185,36 @@ func (h *Handler) getConnection(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) updateConnection(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	var body struct {
-		Pool   *manageddb.PoolConfig `json:"pool"`
-		Name   *string               `json:"name"`
-		Driver *string               `json:"driver"`
-		DSN    string                `json:"dsn"`
+		Pool *struct {
+			MaxOpen            *int   `json:"maxOpen"`
+			MaxIdle            *int   `json:"maxIdle"`
+			MaxLifetimeSeconds *int64 `json:"maxLifetimeSeconds"`
+			MaxIdleTimeSeconds *int64 `json:"maxIdleTimeSeconds"`
+		} `json:"pool"`
 	}
 	if !decode(w, r, &body) {
 		return
 	}
-	out, err := h.connections.Update(r.Context(), r.PathValue("id"), manageddb.ConnectionUpdate{
-		Name: body.Name, Driver: body.Driver, DSN: body.DSN, Pool: body.Pool,
-	})
+	if body.Pool == nil ||
+		body.Pool.MaxOpen == nil ||
+		body.Pool.MaxIdle == nil ||
+		body.Pool.MaxLifetimeSeconds == nil ||
+		body.Pool.MaxIdleTimeSeconds == nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", "all four pool settings are required")
+		return
+	}
+	pool := manageddb.PoolConfig{
+		MaxOpen:            *body.Pool.MaxOpen,
+		MaxIdle:            *body.Pool.MaxIdle,
+		MaxLifetimeSeconds: *body.Pool.MaxLifetimeSeconds,
+		MaxIdleTimeSeconds: *body.Pool.MaxIdleTimeSeconds,
+	}
+	out, err := h.connections.UpdatePool(r.Context(), r.PathValue("id"), pool)
 	switch {
-	case errors.Is(err, manageddb.ErrInvalidUpdate):
+	case errors.Is(err, manageddb.ErrInvalidPool):
 		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
 	case errors.Is(err, manageddb.ErrNotFound):
 		writeError(w, http.StatusNotFound, "not_found", "connection not found")
-	case errors.Is(err, manageddb.ErrConnectionFailed):
-		writeError(w, http.StatusBadGateway, "connection_failed", "could not verify the new database connection; previous settings are unchanged")
 	case err != nil:
 		writeError(w, http.StatusServiceUnavailable, "connection_unavailable", "could not save connection settings")
 	default:

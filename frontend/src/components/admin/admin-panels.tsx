@@ -164,6 +164,14 @@ export type ConnectionFormValues = {
   connectionTimeoutSeconds: number;
 };
 
+export type ConnectionPoolValues = Pick<
+  ConnectionFormValues,
+  | "maxOpenConnections"
+  | "maxIdleConnections"
+  | "maxLifetimeSeconds"
+  | "maxIdleTimeSeconds"
+>;
+
 const defaultConnection: ConnectionFormValues = {
   name: "",
   engine: "postgres",
@@ -175,8 +183,8 @@ const defaultConnection: ConnectionFormValues = {
   sslMode: "prefer",
   maxOpenConnections: 10,
   maxIdleConnections: 5,
-  maxLifetimeSeconds: 0,
-  maxIdleTimeSeconds: 0,
+  maxLifetimeSeconds: 60,
+  maxIdleTimeSeconds: 5,
   connectionTimeoutSeconds: 10,
 };
 
@@ -211,68 +219,70 @@ export function ConnectionForm({
   return (
     <form className="space-y-5" onSubmit={(event) => submit(event, onSubmit)}>
       <div className="grid gap-4 sm:grid-cols-2">
-        <TextField
-          label="Name"
-          value={values.name}
-          onChange={(value) => update("name", value)}
-          required
-        />
-        <label className="space-y-2 text-sm font-medium">
-          Engine
-          <select
-            className="h-9 w-full rounded-md border bg-background px-3 text-sm"
-            onChange={(event) =>
-              update(
-                "engine",
-                event.target.value as ConnectionSummary["engine"],
-              )
-            }
-            value={values.engine}
-          >
-            <option value="postgres">PostgreSQL</option>
-            <option value="mysql">MySQL</option>
-            <option value="mariadb">MariaDB</option>
-          </select>
-        </label>
-        <TextField
-          label="Host"
-          value={values.host}
-          onChange={(value) => update("host", value)}
-          required
-        />
-        <NumberField
-          label="Port"
-          min={1}
-          value={values.port}
-          onChange={(value) => update("port", value)}
-        />
-        <TextField
-          label="Database"
-          value={values.database}
-          onChange={(value) => update("database", value)}
-          required
-        />
-        <TextField
-          label="Username"
-          value={values.username}
-          onChange={(value) => update("username", value)}
-          required
-        />
-        <TextField
-          autoComplete="new-password"
-          label={
-            editing ? "Password (re-enter to replace saved credentials)" : "Password"
-          }
-          type="password"
-          value={values.password}
-          onChange={(value) => update("password", value)}
-          required
-        />
-        <TextField
-          label="SSL mode"
-          value={values.sslMode}
-          onChange={(value) => update("sslMode", value)}
-        />
+        {!editing ? (
+          <>
+            <TextField
+              label="Name"
+              value={values.name}
+              onChange={(value) => update("name", value)}
+              required
+            />
+            <label className="space-y-2 text-sm font-medium">
+              Engine
+              <select
+                className="h-9 w-full rounded-md border bg-background px-3 text-sm"
+                onChange={(event) =>
+                  update(
+                    "engine",
+                    event.target.value as ConnectionSummary["engine"],
+                  )
+                }
+                value={values.engine}
+              >
+                <option value="postgres">PostgreSQL</option>
+                <option value="mysql">MySQL</option>
+                <option value="mariadb">MariaDB</option>
+              </select>
+            </label>
+            <TextField
+              label="Host"
+              value={values.host}
+              onChange={(value) => update("host", value)}
+              required
+            />
+            <NumberField
+              label="Port"
+              min={1}
+              value={values.port}
+              onChange={(value) => update("port", value)}
+            />
+            <TextField
+              label="Database"
+              value={values.database}
+              onChange={(value) => update("database", value)}
+              required
+            />
+            <TextField
+              label="Username"
+              value={values.username}
+              onChange={(value) => update("username", value)}
+              required
+            />
+            <TextField
+              autoComplete="new-password"
+              label="Password"
+              type="password"
+              value={values.password}
+              onChange={(value) => update("password", value)}
+              required
+            />
+            <TextField
+              label="SSL mode"
+              value={values.sslMode}
+              onChange={(value) => update("sslMode", value)}
+            />
+          </>
+        ) : null}
         <NumberField
           label="Max open connections"
           value={values.maxOpenConnections}
@@ -293,11 +303,13 @@ export function ConnectionForm({
           value={values.maxIdleTimeSeconds}
           onChange={(value) => update("maxIdleTimeSeconds", value)}
         />
-        <NumberField
-          label="Connection timeout (seconds)"
-          value={values.connectionTimeoutSeconds}
-          onChange={(value) => update("connectionTimeoutSeconds", value)}
-        />
+        {!editing ? (
+          <NumberField
+            label="Connection timeout (seconds)"
+            value={values.connectionTimeoutSeconds}
+            onChange={(value) => update("connectionTimeoutSeconds", value)}
+          />
+        ) : null}
       </div>
       <div className="flex flex-wrap justify-end gap-2">
         <Button disabled={busy} type="submit">
@@ -405,7 +417,9 @@ export function MemberPicker({
               />
               {member.label}
               {member.active === false ? (
-                <span className="text-xs text-muted-foreground">(inactive)</span>
+                <span className="text-xs text-muted-foreground">
+                  (inactive)
+                </span>
               ) : null}
             </label>
           </li>

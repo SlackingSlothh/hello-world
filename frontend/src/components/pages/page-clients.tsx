@@ -340,11 +340,17 @@ export function ConnectionManagement() {
             </CardTitle>
           </CardHeader>
           <CardContent>
-            <p className="mb-4 text-sm text-muted-foreground">
-              Credentials are never returned by the backend. To edit a
-              connection, re-enter its host, database, username, and password.
-              Saving verifies the replacement connection.
-            </p>
+            {editing ? (
+              <p className="mb-4 text-sm text-muted-foreground">
+                The connection target and credentials cannot be changed here.
+                Only connection-pool settings can be updated.
+              </p>
+            ) : (
+              <p className="mb-4 text-sm text-muted-foreground">
+                Saving verifies the new database connection. Credentials are
+                never returned by the backend.
+              </p>
+            )}
             <ConnectionForm
               busy={busy}
               editing={Boolean(editing)}
