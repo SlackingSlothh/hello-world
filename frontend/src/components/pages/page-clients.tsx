@@ -1,7 +1,13 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import {
@@ -12,9 +18,9 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import {
-  AccessGrantMatrix,
   ConnectionForm,
   ConnectionList,
+  GroupAccessEditor,
   type AccessGrant,
   type ConnectionFormValues,
   type ConnectionSummary,
@@ -49,9 +55,23 @@ import {
   type MigrationRecord,
   type RequestSummary,
 } from "@/components/migration/migration-panels";
-import { EmptyState } from "@/components/shared/async-states";
+import {
+  EmptyState,
+  ErrorState,
+  LoadingState,
+} from "@/components/shared/async-states";
 import { ConfirmDialog } from "@/components/shared/confirm-dialog";
 import { PageHeader } from "@/components/shared/page-header";
+import {
+  accessGrantLevel,
+  createConnection,
+  deleteConnection,
+  listAdminConnections,
+  listGroupAccess,
+  setConnectionConnected,
+  setGroupConnectionAccess,
+  updateConnection,
+} from "@/lib/api/admin";
 import { login } from "@/lib/api/auth";
 import { databaseRouteKey } from "@/lib/database-routing";
 import type { MockQueryRow, MockTableRow } from "@/lib/mock-data";
@@ -146,64 +166,116 @@ export function AdminHome() {
   );
 }
 
-export function ConnectionManagement({
-  initialConnections,
-}: {
-  initialConnections: ConnectionSummary[];
-}) {
-  const [connections, setConnections] = useState(initialConnections);
+function errorMessage(error: unknown, fallback: string) {
+  return error instanceof Error ? error.message : fallback;
+}
+
+export function ConnectionManagement() {
+  const [connections, setConnections] = useState<ConnectionSummary[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string>();
+  const [actionError, setActionError] = useState<string>();
   const [formOpen, setFormOpen] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [pendingConnectionId, setPendingConnectionId] = useState<string>();
   const [editing, setEditing] = useState<ConnectionSummary>();
   const [deleting, setDeleting] = useState<ConnectionSummary>();
 
-  async function testConnection(values: ConnectionFormValues) {
-    const success = Boolean(values.host.trim() && values.database.trim());
-    if (success) toast.success("Mock connection test succeeded.");
-    else toast.error("Host and database are required.");
-  }
+  const loadConnections = useCallback(() => listAdminConnections(), []);
+
+  const refresh = useCallback(async () => {
+    setLoading(true);
+    setLoadError(undefined);
+    try {
+      setConnections(await loadConnections());
+    } catch (error) {
+      setLoadError(errorMessage(error, "Could not load connections."));
+    } finally {
+      setLoading(false);
+    }
+  }, [loadConnections]);
+
+  useEffect(() => {
+    let cancelled = false;
+    loadConnections()
+      .then((items) => {
+        if (!cancelled) setConnections(items);
+      })
+      .catch((error: unknown) => {
+        if (!cancelled) {
+          setLoadError(errorMessage(error, "Could not load connections."));
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [loadConnections]);
 
   async function saveConnection(values: ConnectionFormValues) {
     setBusy(true);
-    setConnections((current) => {
-      const record: ConnectionSummary = {
-        id: editing?.id ?? `connection-${Date.now()}`,
-        name: values.name,
-        engine: values.engine,
-        host: values.host,
-        port: values.port,
-        database: values.database,
-        status: editing?.status ?? "disconnected",
-        activeConnections: editing?.activeConnections ?? 0,
-        idleConnections: editing?.idleConnections ?? 0,
-      };
-      return editing
-        ? current.map((item) => (item.id === editing.id ? record : item))
-        : [...current, record];
-    });
-    setBusy(false);
-    setFormOpen(false);
-    setEditing(undefined);
-    toast.success(
-      editing ? "Mock connection updated." : "Mock connection saved.",
-    );
+    setActionError(undefined);
+    try {
+      const saved = editing
+        ? await updateConnection(editing.id, {
+            maxOpenConnections: values.maxOpenConnections,
+            maxIdleConnections: values.maxIdleConnections,
+            maxLifetimeSeconds: values.maxLifetimeSeconds,
+            maxIdleTimeSeconds: values.maxIdleTimeSeconds,
+          })
+        : await createConnection(values);
+      setConnections((current) =>
+        editing
+          ? current.map((item) => (item.id === saved.id ? saved : item))
+          : [...current, saved],
+      );
+      setFormOpen(false);
+      setEditing(undefined);
+      toast.success(editing ? "Connection updated." : "Connection created.");
+    } catch (error) {
+      setActionError(errorMessage(error, "Could not save the connection."));
+    } finally {
+      setBusy(false);
+    }
   }
 
-  function updateStatus(connection: ConnectionSummary, status: string) {
-    setConnections((items) =>
-      items.map((item) =>
-        item.id === connection.id ? { ...item, status } : item,
-      ),
-    );
-    toast.success(`Mock connection ${status}.`);
+  async function changeConnectionState(
+    connection: ConnectionSummary,
+    connected: boolean,
+  ) {
+    setPendingConnectionId(connection.id);
+    setActionError(undefined);
+    try {
+      await setConnectionConnected(connection.id, connected);
+      await refresh();
+      toast.success(`Connection ${connected ? "connected" : "disconnected"}.`);
+    } catch (error) {
+      setActionError(
+        errorMessage(error, "Could not change the connection state."),
+      );
+    } finally {
+      setPendingConnectionId(undefined);
+    }
   }
 
-  function removeConnection(connection: ConnectionSummary) {
-    setConnections((items) =>
-      items.filter((item) => item.id !== connection.id),
-    );
-    setDeleting(undefined);
-    toast.success("Mock connection removed.");
+  async function removeConnection() {
+    if (!deleting) return;
+    setBusy(true);
+    setActionError(undefined);
+    try {
+      await deleteConnection(deleting.id);
+      setConnections((items) =>
+        items.filter((item) => item.id !== deleting.id),
+      );
+      setDeleting(undefined);
+      toast.success("Connection deleted.");
+    } catch (error) {
+      setActionError(errorMessage(error, "Could not delete the connection."));
+    } finally {
+      setBusy(false);
+    }
   }
 
   function editConnection(connection: ConnectionSummary) {
@@ -215,16 +287,17 @@ export function ConnectionManagement({
     ? {
         name: editing.name,
         engine: editing.engine,
-        host: editing.host,
-        port: editing.port,
-        database: editing.database,
+        host: "",
+        port: editing.engine === "postgres" ? 5432 : 3306,
+        database: "",
         username: "",
         password: "",
         sslMode: "prefer",
-        maxOpenConnections: 10,
-        maxIdleConnections: 5,
+        maxOpenConnections: editing.maxOpenConnections,
+        maxIdleConnections: editing.maxIdleConnections,
+        maxLifetimeSeconds: editing.maxLifetimeSeconds,
+        maxIdleTimeSeconds: editing.maxIdleTimeSeconds,
         connectionTimeoutSeconds: 10,
-        statementTimeoutSeconds: 30,
       }
     : undefined;
 
@@ -244,6 +317,12 @@ export function ConnectionManagement({
         description="Configure and monitor server-managed target databases."
         title="Connections"
       />
+      {actionError ? (
+        <ErrorState message={actionError} title="Connection action failed" />
+      ) : null}
+      {loadError ? (
+        <ErrorState message={loadError} onRetry={() => void refresh()} />
+      ) : null}
       {formOpen ? (
         <Card>
           <CardHeader>
@@ -252,85 +331,173 @@ export function ConnectionManagement({
             </CardTitle>
           </CardHeader>
           <CardContent>
+            {editing ? (
+              <p className="mb-4 text-sm text-muted-foreground">
+                The connection target and credentials cannot be changed here.
+                Only connection-pool settings can be updated.
+              </p>
+            ) : (
+              <p className="mb-4 text-sm text-muted-foreground">
+                Saving verifies the new database connection. Credentials are
+                never returned by the backend.
+              </p>
+            )}
             <ConnectionForm
               busy={busy}
               editing={Boolean(editing)}
               initialValue={initialValue}
               onSubmit={saveConnection}
-              onTest={testConnection}
               key={editing?.id ?? "new"}
             />
           </CardContent>
         </Card>
       ) : null}
-      <ConnectionList
-        connections={connections}
-        onConnect={(item) => updateStatus(item, "connected")}
-        onDelete={setDeleting}
-        onDisconnect={(item) => updateStatus(item, "disconnected")}
-        onEdit={editConnection}
-      />
+      {loading ? (
+        <LoadingState label="Loading database connections" />
+      ) : loadError ? null : (
+        <ConnectionList
+          connections={connections}
+          onConnect={(item) => void changeConnectionState(item, true)}
+          onDelete={setDeleting}
+          onDisconnect={(item) => void changeConnectionState(item, false)}
+          onEdit={editConnection}
+          pendingId={pendingConnectionId}
+        />
+      )}
       <ConfirmDialog
-        description={`Delete ${deleting?.name ?? "this connection"}? This mock action only changes the local demo view.`}
-        onConfirm={() => deleting && removeConnection(deleting)}
+        description={`Delete ${deleting?.name ?? "this connection"}? Groups with grants referencing this connection may also be affected.`}
+        onConfirm={() => void removeConnection()}
         onOpenChange={(open) => {
-          if (!open) setDeleting(undefined);
+          if (!open && !busy) setDeleting(undefined);
         }}
         open={Boolean(deleting)}
         title="Delete connection"
         confirmLabel="Delete connection"
         destructive
+        pending={busy}
       />
     </div>
   );
 }
 
-export function AccessManagement({
-  groups,
-  connections,
-  initialGrants,
-}: {
-  groups: Array<{ id: string; name: string }>;
-  connections: Array<{ id: string; name: string }>;
-  initialGrants: AccessGrant[];
-}) {
-  const [grants, setGrants] = useState(initialGrants);
-  function changeGrant(
+export function AccessManagement() {
+  const [groups, setGroups] = useState<Array<{ id: string; name: string }>>([]);
+  const [connections, setConnections] = useState<
+    Array<{ id: string; name: string; driver: string }>
+  >([]);
+  const [grants, setGrants] = useState<AccessGrant[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string>();
+  const [actionError, setActionError] = useState<string>();
+  const [pendingGrant, setPendingGrant] = useState<string>();
+
+  const loadAccess = useCallback(async () => {
+    const data = await listGroupAccess();
+    return {
+      groups: data.groups.map(({ id, name }) => ({ id, name })),
+      connections: data.connections.map(({ id, name, driver }) => ({
+        id,
+        name,
+        driver,
+      })),
+      grants: data.groups.flatMap((group) =>
+        group.grants.map((grant) => ({
+          id: `${grant.groupId}:${grant.databaseId}`,
+          groupId: grant.groupId,
+          connectionId: grant.databaseId,
+          level: accessGrantLevel(grant.access),
+        })),
+      ),
+    };
+  }, []);
+
+  const refresh = useCallback(async () => {
+    setLoading(true);
+    setLoadError(undefined);
+    try {
+      const data = await loadAccess();
+      setGroups(data.groups);
+      setConnections(data.connections);
+      setGrants(data.grants);
+    } catch (error) {
+      setLoadError(errorMessage(error, "Could not load access grants."));
+    } finally {
+      setLoading(false);
+    }
+  }, [loadAccess]);
+
+  useEffect(() => {
+    let cancelled = false;
+    loadAccess()
+      .then((data) => {
+        if (!cancelled) {
+          setGroups(data.groups);
+          setConnections(data.connections);
+          setGrants(data.grants);
+        }
+      })
+      .catch((error: unknown) => {
+        if (!cancelled) {
+          setLoadError(errorMessage(error, "Could not load access grants."));
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [loadAccess]);
+
+  async function changeGrant(
     groupId: string,
     connectionId: string,
     level: AccessGrant["level"],
   ) {
-    setGrants((current) => {
-      const existing = current.find(
-        (grant) =>
-          grant.groupId === groupId && grant.connectionId === connectionId,
-      );
-      if (!level) return current.filter((grant) => grant.id !== existing?.id);
-      if (existing) {
-        return current.map((grant) =>
-          grant.id === existing.id ? { ...grant, level } : grant,
-        );
-      }
-      return [
-        ...current,
-        { id: `grant-${Date.now()}`, groupId, connectionId, level },
-      ];
-    });
-    toast.success("Mock access grant updated.");
+    const key = `${groupId}:${connectionId}`;
+    setPendingGrant(key);
+    setActionError(undefined);
+    try {
+      const access =
+        level === "view" ? "read" : level === "view_edit" ? "write" : null;
+      await setGroupConnectionAccess(groupId, connectionId, access);
+      setGrants((current) => {
+        const remaining = current.filter((grant) => grant.id !== key);
+        return level
+          ? [...remaining, { id: key, groupId, connectionId, level }]
+          : remaining;
+      });
+      toast.success("Access grant updated.");
+    } catch (error) {
+      setActionError(errorMessage(error, "Could not update the access grant."));
+    } finally {
+      setPendingGrant(undefined);
+    }
   }
 
   return (
     <div className="space-y-5">
       <PageHeader
-        description="Access changes affect active sessions and pending migration approvals."
+        description="Choose a group, then search and manage access to its database connections."
         title="Group access"
       />
-      <AccessGrantMatrix
-        connections={connections}
-        grants={grants}
-        groups={groups}
-        onChange={changeGrant}
-      />
+      {actionError ? (
+        <ErrorState message={actionError} title="Could not update access" />
+      ) : null}
+      {loadError ? (
+        <ErrorState message={loadError} onRetry={() => void refresh()} />
+      ) : null}
+      {loading ? (
+        <LoadingState label="Loading group access" />
+      ) : loadError ? null : (
+        <GroupAccessEditor
+          connections={connections}
+          disabled={Boolean(pendingGrant)}
+          grants={grants}
+          groups={groups}
+          onChange={changeGrant}
+        />
+      )}
     </div>
   );
 }
