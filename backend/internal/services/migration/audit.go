@@ -4,7 +4,10 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"strings"
 	"time"
+
+	"hello-world/internal/observability"
 )
 
 type SlogAuditLogger struct {
@@ -12,35 +15,75 @@ type SlogAuditLogger struct {
 }
 
 func (l SlogAuditLogger) Log(ctx context.Context, event AuditEvent) {
+	if l.Logger == nil {
+		return
+	}
 	attrs := []slog.Attr{
+		slog.String("event", event.Action),
 		slog.String("actor", event.ActorUserID),
-		slog.String("database_id", event.DatabaseID),
-		slog.Int64("migration_id", event.ObjectID),
+		slog.String("database", event.DatabaseID),
 		slog.String("status", event.Status),
 	}
-	if event.ExecutionID != 0 {
-		attrs = append(attrs,
-			slog.Int64("execution_id", event.ExecutionID),
-			slog.Int("attempt", event.AttemptNumber),
-			slog.Int64("revision", event.Revision),
-			slog.String("operation", string(event.Operation)),
-			slog.Int64("duration_ms", event.DurationMs),
-		)
+	if event.ObjectID != 0 {
+		attrs = append(attrs, slog.Int64("migration_id", event.ObjectID))
+	}
+	if event.JobID != "" {
+		attrs = append(attrs, slog.String("job_id", event.JobID))
+	}
+	if event.ExecutionUUID != "" {
+		attrs = append(attrs, slog.String("execution_id", event.ExecutionUUID))
+	} else if event.ExecutionID != 0 {
+		attrs = append(attrs, slog.Int64("execution_id", event.ExecutionID))
+	}
+	if event.AttemptNumber != 0 {
+		attrs = append(attrs, slog.Int("attempt", event.AttemptNumber))
+	}
+	if event.Batch != 0 {
+		attrs = append(attrs, slog.Int("batch", event.Batch))
+	}
+	if event.Revision != 0 {
+		attrs = append(attrs, slog.Int64("revision", event.Revision))
+	}
+	if event.Operation != "" {
+		attrs = append(attrs, slog.String("operation", string(event.Operation)))
+	}
+	if event.DurationMs > 0 || event.ExecutionID != 0 || event.ExecutionUUID != "" {
+		attrs = append(attrs, slog.Int64("duration_ms", event.DurationMs))
+	}
+	if event.RowsAffected != nil {
+		attrs = append(attrs, slog.Int64("rows_affected", *event.RowsAffected))
 	}
 	if event.Version != nil {
 		attrs = append(attrs, slog.Int64("version", *event.Version))
 	}
 	if event.SQL != "" {
-		attrs = append(attrs, slog.String("sql", event.SQL))
+		redactedSQL := observability.RedactSQL(event.SQL)
+		attrs = append(attrs,
+			slog.String("query", redactedSQL),
+			slog.String("sql", redactedSQL),
+		)
+	}
+	if len(event.Parameters) > 0 {
+		attrs = append(attrs, slog.Any("parameters", observability.RedactParams(event.Parameters)))
+	}
+	if event.Error != "" {
+		attrs = append(attrs, slog.String("error", observability.RedactString(event.Error)))
 	}
 	if event.SQLState != "" {
 		attrs = append(attrs, slog.String("sqlstate", event.SQLState))
 	}
+	traceID, spanID := observability.TraceIDs(ctx)
+	if traceID != "" {
+		attrs = append(attrs, slog.String("trace_id", traceID))
+	}
+	if spanID != "" {
+		attrs = append(attrs, slog.String("span_id", spanID))
+	}
 	level := slog.LevelInfo
-	switch event.Status {
-	case "FAILED", "ROLLBACK_ERROR":
+	switch strings.ToUpper(event.Status) {
+	case "FAILED", "ROLLBACK_ERROR", "ERROR":
 		level = slog.LevelError
-	case "UNCONFIRMED":
+	case "UNCONFIRMED", "PARTIAL", "PARTIALLY_REVERTED", "UNCERTAIN", "DENIED":
 		level = slog.LevelWarn
 	}
 	l.Logger.LogAttrs(ctx, level, event.Action, attrs...)
@@ -61,9 +104,12 @@ func (s *Service) logRun(ctx context.Context, m *Migration, run *MigrationRun, e
 	event.Revision = run.Revision
 	event.Version = m.Version
 	event.DurationMs = max(0, event.CreatedAt.Sub(since).Milliseconds())
-	var sqlError interface{ SQLState() string }
-	if errors.As(cause, &sqlError) {
-		event.SQLState = sqlError.SQLState()
+	if cause != nil {
+		event.Error = cause.Error()
+		var sqlError interface{ SQLState() string }
+		if errors.As(cause, &sqlError) {
+			event.SQLState = sqlError.SQLState()
+		}
 	}
 	s.logAudit(ctx, event)
 }

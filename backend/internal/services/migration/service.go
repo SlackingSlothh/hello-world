@@ -60,9 +60,11 @@ const (
 type RunOperation string
 
 const (
-	RunApply    RunOperation = "APPLY"
-	RunRollback RunOperation = "ROLLBACK"
-	RunForward  RunOperation = "FORWARD"
+	RunApply       RunOperation = "APPLY"
+	RunRollback    RunOperation = "ROLLBACK"
+	RunForward     RunOperation = "FORWARD"
+	RunResumeBatch RunOperation = "RESUME_BATCH"
+	RunRevertBatch RunOperation = "REVERT_BATCH"
 )
 
 type TargetDialect string
@@ -89,31 +91,34 @@ type Principal struct {
 	Username string
 }
 
-// representasi satu baris pada tabel migrations di database platform
 type Migration struct {
-	ID                 int64      `json:"id"`
-	DatabaseID         string     `json:"database_id"`
-	Version            *int64     `json:"version,omitempty"` // bernilai nil saat draft atau failed, berisi nomor urut saat applied
-	Title              string     `json:"title"`
-	Description        string     `json:"description"`
-	SQLContent         string     `json:"sql_content"`
-	SQLDown            string     `json:"sql_down,omitempty"`
-	IrreversibleReason string     `json:"irreversible_reason,omitempty"`
-	Revision           int64      `json:"revision"`
-	FrozenAt           *time.Time `json:"frozen_at,omitempty"`
-	Status             Status     `json:"status"`
-	CreatedBy          string     `json:"created_by"`
-	UpdatedBy          string     `json:"updated_by"`
-	CreatedAt          time.Time  `json:"created_at"`
-	UpdatedAt          time.Time  `json:"updated_at"`
-	AppliedAt          *time.Time `json:"applied_at,omitempty"`
+	ID                 int64         `json:"id"`
+	DatabaseID         string        `json:"database_id"`
+	Version            *int64        `json:"version,omitempty"`
+	Title              string        `json:"title"`
+	Description        string        `json:"description"`
+	SQLContent         string        `json:"sql_content"`
+	SQLDown            string        `json:"sql_down,omitempty"`
+	IrreversibleReason string        `json:"irreversible_reason,omitempty"`
+	ExecutionMode      ExecutionMode `json:"execution_mode"`
+	BatchByAttribute   string        `json:"batch_by_attribute,omitempty"`
+	BatchSize          *int          `json:"batch_size,omitempty"`
+	Revision           int64         `json:"revision"`
+	FrozenAt           *time.Time    `json:"frozen_at,omitempty"`
+	Status             Status        `json:"status"`
+	CreatedBy          string        `json:"created_by"`
+	UpdatedBy          string        `json:"updated_by"`
+	CreatedAt          time.Time     `json:"created_at"`
+	UpdatedAt          time.Time     `json:"updated_at"`
+	AppliedAt          *time.Time    `json:"applied_at,omitempty"`
 }
 
-// representasi satu baris riwayat percobaan pada tabel migration_runs
 type MigrationRun struct {
 	ID                  int64        `json:"id"`
 	MigrationID         int64        `json:"migration_id"`
 	DatabaseID          string       `json:"database_id"`
+	JobID               *string      `json:"job_id,omitempty"`
+	ExecutionUUID       *string      `json:"execution_uuid,omitempty"`
 	AttemptNumber       int          `json:"attempt_number"`
 	Revision            int64        `json:"revision"`
 	Operation           RunOperation `json:"operation"`
@@ -219,7 +224,6 @@ type TargetTx interface {
 	Rollback(ctx context.Context) error
 }
 
-// struktur data catatan aktivitas audit
 type AuditEvent struct {
 	ActorUserID   string
 	Action        string
@@ -229,13 +233,19 @@ type AuditEvent struct {
 	Status        string
 	Message       string
 	CreatedAt     time.Time
+	JobID         string
 	ExecutionID   int64
+	ExecutionUUID string
 	Operation     RunOperation
 	AttemptNumber int
+	Batch         int
 	Revision      int64
 	Version       *int64
 	DurationMs    int64
+	RowsAffected  *int64
 	SQL           string
+	Parameters    []any
+	Error         string
 	SQLState      string
 }
 
@@ -251,11 +261,126 @@ func AdvisoryLockKey(databaseID string) int64 {
 	return int64(h.Sum64())
 }
 
-// memvalidasi isi sql agar tidak kosong dan tidak memakai perintah transaksi manual
+const InternalSchemaName = "_platform_internal"
+
+func ReferencesInternalSchema(rawSQL string) bool {
+	var word strings.Builder
+	check := func() bool {
+		if word.Len() == 0 {
+			return false
+		}
+		matched := strings.EqualFold(word.String(), InternalSchemaName)
+		word.Reset()
+		return matched
+	}
+	inSingle := false
+	inDouble := false
+	inBacktick := false
+	for i := 0; i < len(rawSQL); i++ {
+		c := rawSQL[i]
+		var next byte
+		if i+1 < len(rawSQL) {
+			next = rawSQL[i+1]
+		}
+		if inSingle {
+			if c == '\'' {
+				if next == '\'' {
+					i++
+					continue
+				}
+				inSingle = false
+			}
+			continue
+		}
+		if inDouble {
+			if c == '"' {
+				if next == '"' {
+					word.WriteByte('"')
+					i++
+					continue
+				}
+				inDouble = false
+				if check() {
+					return true
+				}
+				continue
+			}
+			word.WriteByte(c)
+			continue
+		}
+		if inBacktick {
+			if c == '`' {
+				if next == '`' {
+					word.WriteByte('`')
+					i++
+					continue
+				}
+				inBacktick = false
+				if check() {
+					return true
+				}
+				continue
+			}
+			word.WriteByte(c)
+			continue
+		}
+		if c == '-' && next == '-' {
+			if check() {
+				return true
+			}
+			for i+1 < len(rawSQL) && rawSQL[i+1] != '\n' {
+				i++
+			}
+			continue
+		}
+		if c == '/' && next == '*' {
+			if check() {
+				return true
+			}
+			i += 2
+			for i+1 < len(rawSQL) && !(rawSQL[i] == '*' && rawSQL[i+1] == '/') {
+				i++
+			}
+			i++
+			continue
+		}
+		if c == '\'' {
+			if check() {
+				return true
+			}
+			inSingle = true
+			continue
+		}
+		if c == '"' {
+			if check() {
+				return true
+			}
+			inDouble = true
+			continue
+		}
+		if c == '`' {
+			if check() {
+				return true
+			}
+			inBacktick = true
+			continue
+		}
+		if (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_' {
+			word.WriteByte(c)
+		} else if check() {
+			return true
+		}
+	}
+	return check()
+}
+
 func ValidateTransactionalSQL(rawSQL string) error {
 	trimmed := strings.TrimSpace(rawSQL)
 	if trimmed == "" {
 		return fmt.Errorf("%w: kueri SQL tidak boleh kosong", ErrInvalidSQL)
+	}
+	if ReferencesInternalSchema(trimmed) {
+		return fmt.Errorf("%w: skema internal %s tidak boleh diakses atau dimodifikasi", ErrInvalidSQL, InternalSchemaName)
 	}
 
 	// bersihkan komentar dan isi string sebelum mengecek kata kunci sql

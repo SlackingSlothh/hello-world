@@ -1,13 +1,16 @@
 package server_test
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
 	"hello-world/internal/config"
+	"hello-world/internal/observability"
 	"hello-world/internal/services/authn"
 	"hello-world/internal/services/authz"
 	"hello-world/internal/services/session/test/support"
@@ -159,5 +162,80 @@ func TestIntegrationServerRoutesAndMiddlewareOrder(t *testing.T) {
 	}
 	if app.HTTP.Addr != ":8080" || app.HTTP.ReadHeaderTimeout <= 0 || app.HTTP.ReadTimeout <= 0 || app.HTTP.IdleTimeout <= 0 {
 		t.Fatal("server config not applied")
+	}
+}
+
+func TestServerObservabilityLoggingTracingAndMetrics(t *testing.T) {
+	telemetry, err := observability.InitTelemetry(context.Background(), observability.TelemetryConfig{
+		Exporter:    "none",
+		ServiceName: "datadock-http-test",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = telemetry.Shutdown(context.Background()) }()
+
+	var logBuf bytes.Buffer
+	logger := observability.NewLogger(observability.LoggerOptions{
+		Writer:      &logBuf,
+		ServiceName: "datadock-http-test",
+	})
+	metrics := observability.NewMetrics()
+	metrics.IncJobCompleted("bioskop", "success", "normal", "execute")
+
+	hash, err := authn.HashPassword("pw-secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := hash.Encoded()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	app, err := server.New(
+		config.Config{Address: ":8080", PublicOrigin: "https://app.example", SessionEncryptionKey: make([]byte, 32)},
+		server.Dependencies{
+			Users:    userReader{user: users.User{ID: "u1", Username: "luis", Active: true, PasswordHash: encoded}},
+			Profiles: userReader{user: users.User{ID: "u1", Username: "luis", Active: true}},
+			Sessions: support.NewStore(),
+			Access:   accessReader{},
+			Logger:   logger,
+			Metrics:  metrics,
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "https://app.example/auth/login", strings.NewReader("username=luis&password=pw-secret"))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Origin", "https://app.example")
+	rec := httptest.NewRecorder()
+	app.HTTP.Handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("expected 204 login, got %d", rec.Code)
+	}
+
+	lines := strings.Split(strings.TrimSpace(logBuf.String()), "\n")
+	if len(lines) < 2 {
+		t.Fatalf("expected auth and http request log lines, got: %s", logBuf.String())
+	}
+	for _, line := range lines {
+		var entry map[string]any
+		if err := json.Unmarshal([]byte(line), &entry); err != nil {
+			t.Fatalf("invalid json line %q: %v", line, err)
+		}
+		if entry["trace_id"] == "" || entry["span_id"] == "" {
+			t.Fatalf("missing trace correlation in %q", line)
+		}
+		if strings.Contains(line, "pw-secret") {
+			t.Fatalf("password leaked into log: %q", line)
+		}
+	}
+
+	metricsRec := httptest.NewRecorder()
+	app.HTTP.Handler.ServeHTTP(metricsRec, httptest.NewRequest(http.MethodGet, "https://app.example/metrics", nil))
+	if metricsRec.Code != http.StatusOK || !strings.Contains(metricsRec.Body.String(), "datadock_migration_jobs_completed_total") {
+		t.Fatalf("unexpected /metrics response: %d %s", metricsRec.Code, metricsRec.Body.String())
 	}
 }

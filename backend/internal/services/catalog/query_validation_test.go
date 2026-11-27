@@ -21,6 +21,10 @@ func TestValidateSelect(t *testing.T) {
 		{name: "common table expression", query: "WITH rows AS (SELECT 1) SELECT * FROM rows", wantErr: true},
 		{name: "select into", query: "SELECT id INTO copied_users FROM users", wantErr: true},
 		{name: "unclosed quote", query: "SELECT 'unfinished", wantErr: true},
+		{name: "internal schema direct", query: "SELECT * FROM _platform_internal.migration_checkpoints", wantErr: true},
+		{name: "internal schema quoted", query: `SELECT * FROM "_platform_internal".migration_checkpoints`, wantErr: true},
+		{name: "internal schema uppercase", query: "SELECT * FROM _PLATFORM_INTERNAL.migration_checkpoints", wantErr: true},
+		{name: "internal schema string literal allowed", query: "SELECT '_platform_internal' AS label"},
 	}
 
 	for _, test := range tests {

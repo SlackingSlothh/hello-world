@@ -3,17 +3,82 @@ package mysql
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
+	"log/slog"
 	"sort"
 	"strings"
+	"time"
+
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 
 	dbops "hello-world/internal/models/catalog"
+	"hello-world/internal/observability"
 )
 
-type Reader struct{ DB *sql.DB }
+type Reader struct {
+	DB       *sql.DB
+	Logger   *slog.Logger
+	Database string
+}
+
+func (r Reader) queryContext(ctx context.Context, op, query string, args ...any) (*sql.Rows, error) {
+	ctx, span := observability.Tracer("datadock/mysql").Start(
+		ctx,
+		"db.query",
+		trace.WithAttributes(
+			attribute.String("db.system", "mysql"),
+			attribute.String("db.operation", op),
+			attribute.String("database", r.Database),
+		),
+	)
+	started := time.Now()
+	if r.Logger != nil {
+		r.Logger.LogAttrs(ctx, slog.LevelInfo, "db.query.start",
+			slog.String("event", "db.query.start"),
+			slog.String("database", r.Database),
+			slog.String("query", observability.RedactSQL(query)),
+			slog.Any("parameters", observability.RedactParams(args)),
+			slog.String("status", "running"),
+		)
+	}
+	rows, err := r.DB.QueryContext(ctx, query, args...)
+	r.logQueryResult(ctx, span, started, query, args, -1, err)
+	span.End()
+	return rows, err
+}
+
+func (r Reader) logQueryResult(ctx context.Context, span trace.Span, started time.Time, query string, args []any, rowCount int, err error) {
+	durationMs := time.Since(started).Milliseconds()
+	attrs := []slog.Attr{
+		slog.String("event", "db.query.result"),
+		slog.String("database", r.Database),
+		slog.String("query", observability.RedactSQL(query)),
+		slog.Any("parameters", observability.RedactParams(args)),
+		slog.Int64("duration_ms", durationMs),
+	}
+	if rowCount >= 0 {
+		attrs = append(attrs, slog.Int("rows_affected", rowCount))
+	}
+	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+		attrs = append(attrs, slog.String("status", "failed"), slog.String("error", err.Error()))
+		if r.Logger != nil {
+			r.Logger.LogAttrs(ctx, slog.LevelError, "db.query.result", attrs...)
+		}
+		return
+	}
+	attrs = append(attrs, slog.String("status", "success"))
+	if r.Logger != nil {
+		r.Logger.LogAttrs(ctx, slog.LevelInfo, "db.query.result", attrs...)
+	}
+}
 
 func (r Reader) Schemas(ctx context.Context) ([]dbops.Schema, error) {
-	rows, err := r.DB.QueryContext(ctx, `SELECT schema_name FROM information_schema.schemata WHERE schema_name NOT IN ('information_schema','mysql','performance_schema','sys') ORDER BY schema_name`)
+	rows, err := r.queryContext(ctx, "schemas", `SELECT schema_name FROM information_schema.schemata WHERE schema_name NOT IN ('information_schema','mysql','performance_schema','sys') ORDER BY schema_name`)
 	if err != nil {
 		return nil, err
 	}
@@ -29,7 +94,7 @@ func (r Reader) Schemas(ctx context.Context) ([]dbops.Schema, error) {
 	return out, rows.Err()
 }
 func (r Reader) Tables(ctx context.Context, schema string) ([]dbops.Table, error) {
-	rows, err := r.DB.QueryContext(ctx, `SELECT table_schema,table_name,table_type FROM information_schema.tables WHERE table_schema=? ORDER BY table_name`, schema)
+	rows, err := r.queryContext(ctx, "tables", `SELECT table_schema,table_name,table_type FROM information_schema.tables WHERE table_schema=? ORDER BY table_name`, schema)
 	if err != nil {
 		return nil, err
 	}
@@ -45,7 +110,7 @@ func (r Reader) Tables(ctx context.Context, schema string) ([]dbops.Table, error
 	return out, rows.Err()
 }
 func (r Reader) Columns(ctx context.Context, schema, table string) ([]dbops.Column, error) {
-	rows, err := r.DB.QueryContext(ctx, `SELECT column_name,ordinal_position,column_type,is_nullable,column_default FROM information_schema.columns WHERE table_schema=? AND table_name=? ORDER BY ordinal_position`, schema, table)
+	rows, err := r.queryContext(ctx, "columns", `SELECT column_name,ordinal_position,column_type,is_nullable,column_default FROM information_schema.columns WHERE table_schema=? AND table_name=? ORDER BY ordinal_position`, schema, table)
 	if err != nil {
 		return nil, err
 	}
@@ -64,7 +129,7 @@ func (r Reader) Columns(ctx context.Context, schema, table string) ([]dbops.Colu
 	return out, rows.Err()
 }
 func (r Reader) Constraints(ctx context.Context, schema, table string) ([]dbops.Constraint, error) {
-	rows, err := r.DB.QueryContext(ctx, `SELECT tc.constraint_name,tc.constraint_type,GROUP_CONCAT(kcu.column_name ORDER BY kcu.ordinal_position SEPARATOR ',') FROM information_schema.table_constraints tc LEFT JOIN information_schema.key_column_usage kcu ON tc.constraint_schema=kcu.constraint_schema AND tc.constraint_name=kcu.constraint_name AND tc.table_name=kcu.table_name WHERE tc.table_schema=? AND tc.table_name=? GROUP BY tc.constraint_name,tc.constraint_type ORDER BY tc.constraint_name`, schema, table)
+	rows, err := r.queryContext(ctx, "constraints", `SELECT tc.constraint_name,tc.constraint_type,GROUP_CONCAT(kcu.column_name ORDER BY kcu.ordinal_position SEPARATOR ',') FROM information_schema.table_constraints tc LEFT JOIN information_schema.key_column_usage kcu ON tc.constraint_schema=kcu.constraint_schema AND tc.constraint_name=kcu.constraint_name AND tc.table_name=kcu.table_name WHERE tc.table_schema=? AND tc.table_name=? GROUP BY tc.constraint_name,tc.constraint_type ORDER BY tc.constraint_name`, schema, table)
 	if err != nil {
 		return nil, err
 	}
@@ -84,7 +149,7 @@ func (r Reader) Constraints(ctx context.Context, schema, table string) ([]dbops.
 	return out, rows.Err()
 }
 func (r Reader) Indexes(ctx context.Context, schema, table string) ([]dbops.Index, error) {
-	rows, err := r.DB.QueryContext(ctx, `SELECT index_name,non_unique,GROUP_CONCAT(column_name ORDER BY seq_in_index SEPARATOR ','),index_type FROM information_schema.statistics WHERE table_schema=? AND table_name=? GROUP BY index_name,non_unique,index_type ORDER BY index_name`, schema, table)
+	rows, err := r.queryContext(ctx, "indexes", `SELECT index_name,non_unique,GROUP_CONCAT(column_name ORDER BY seq_in_index SEPARATOR ','),index_type FROM information_schema.statistics WHERE table_schema=? AND table_name=? GROUP BY index_name,non_unique,index_type ORDER BY index_name`, schema, table)
 	if err != nil {
 		return nil, err
 	}
@@ -149,7 +214,7 @@ func (r Reader) Rows(ctx context.Context, schema, table string, page dbops.PageR
 	}
 	q += " LIMIT ? OFFSET ?"
 	args = append(args, page.Limit, page.Offset)
-	rows, err := r.DB.QueryContext(ctx, q, args...)
+	rows, err := r.queryContext(ctx, "rows", q, args...)
 	if err != nil {
 		return dbops.RowsPage{}, err
 	}
@@ -158,21 +223,63 @@ func (r Reader) Rows(ctx context.Context, schema, table string, page dbops.PageR
 	return dbops.RowsPage{Columns: selected, Rows: values, Limit: page.Limit, Offset: page.Offset}, err
 }
 func (r Reader) Select(ctx context.Context, req dbops.QueryRequest) (dbops.QueryResult, error) {
+	ctx, span := observability.Tracer("datadock/mysql").Start(
+		ctx,
+		"db.query",
+		trace.WithAttributes(
+			attribute.String("db.system", "mysql"),
+			attribute.String("db.operation", "select"),
+			attribute.String("database", r.Database),
+		),
+	)
+	defer span.End()
+
+	started := time.Now()
+	if r.Logger != nil {
+		r.Logger.LogAttrs(ctx, slog.LevelInfo, "db.query.start",
+			slog.String("event", "db.query.start"),
+			slog.String("database", r.Database),
+			slog.String("query", observability.RedactSQL(req.SQL)),
+			slog.Any("parameters", observability.RedactParams(req.Args)),
+			slog.String("status", "running"),
+		)
+	}
 	tx, err := r.DB.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
+		r.logQueryResult(ctx, span, started, req.SQL, req.Args, 0, err)
 		return dbops.QueryResult{}, err
 	}
-	defer tx.Rollback()
+	defer func() {
+		rbErr := tx.Rollback()
+		if r.Logger != nil {
+			status := "rolled_back"
+			level := slog.LevelInfo
+			attrs := []slog.Attr{
+				slog.String("event", "db.tx.rollback"),
+				slog.String("database", r.Database),
+			}
+			if rbErr != nil && !errors.Is(rbErr, sql.ErrTxDone) {
+				status = "rollback_error"
+				level = slog.LevelError
+				attrs = append(attrs, slog.String("error", rbErr.Error()))
+			}
+			attrs = append(attrs, slog.String("status", status))
+			r.Logger.LogAttrs(ctx, level, "db.tx.rollback", attrs...)
+		}
+	}()
 	rows, err := tx.QueryContext(ctx, req.SQL, req.Args...)
 	if err != nil {
+		r.logQueryResult(ctx, span, started, req.SQL, req.Args, 0, err)
 		return dbops.QueryResult{}, err
 	}
 	defer rows.Close()
 	cols, err := rows.Columns()
 	if err != nil {
+		r.logQueryResult(ctx, span, started, req.SQL, req.Args, 0, err)
 		return dbops.QueryResult{}, err
 	}
 	values, err := scanLimited(rows, req.Limit)
+	r.logQueryResult(ctx, span, started, req.SQL, req.Args, len(values), err)
 	return dbops.QueryResult{Columns: cols, Rows: values}, err
 }
 func quote(s string) string { return "`" + strings.ReplaceAll(s, "`", "``") + "`" }

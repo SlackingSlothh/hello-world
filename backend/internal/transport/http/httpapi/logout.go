@@ -1,6 +1,9 @@
 package httpapi
 
-import "net/http"
+import (
+	"log/slog"
+	"net/http"
+)
 
 func (handler *AuthenticationHandler) Logout(writer http.ResponseWriter, request *http.Request) {
 	if !handler.checkRequest(writer, request) || !readAuthForm(writer, request) {
@@ -16,9 +19,11 @@ func (handler *AuthenticationHandler) Logout(writer http.ResponseWriter, request
 		return
 	}
 	if err := handler.sessions.Logout(request.Context(), identifier); err != nil {
+		handler.logEvent(request.Context(), slog.LevelError, "auth.logout", "", "error")
 		http.Error(writer, "logout unavailable", http.StatusServiceUnavailable)
 		return
 	}
 	handler.cookies.Clear(writer)
+	handler.logEvent(request.Context(), slog.LevelInfo, "auth.logout", "", "success")
 	writer.WriteHeader(http.StatusNoContent)
 }

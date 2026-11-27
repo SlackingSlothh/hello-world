@@ -140,6 +140,9 @@ func (t *sqlTargetTx) ExplainSQL(ctx context.Context, sqlQuery string, analyze b
 }
 
 func (t *sqlTargetTx) InspectSchema(ctx context.Context, schemaName string) ([]TableSchema, error) {
+	if strings.EqualFold(strings.TrimSpace(schemaName), servicemigration.InternalSchemaName) {
+		return nil, fmt.Errorf("%w: internal schema %s cannot be inspected", servicemigration.ErrInvalidSQL, servicemigration.InternalSchemaName)
+	}
 	if schemaName == "" && t.dialect == DialectPostgres {
 		schemaName = "public"
 	}
