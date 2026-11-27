@@ -675,10 +675,13 @@ paths:
             application/json:
               schema:
                 type: object
-                required: [database_id, migrations]
+                required: [database_id, migrations, can_submit]
                 properties:
                   database_id:
                     type: string
+                  can_submit:
+                    type: boolean
+                    description: Whether the caller can submit a migration request for this database.
                   migrations:
                     type: array
                     items:
@@ -1710,7 +1713,7 @@ components:
       enum: [APPLY, ROLLBACK, FORWARD]
     MigrationRequest:
       type: object
-      required: [id, migration_id, database_id, operation, revision, sql_snapshot, requested_by, created_at, status, reviews]
+      required: [id, migration_id, database_id, operation, revision, sql_snapshot, requested_by, created_at, status, reviews, viewer_id, can_execute]
       properties:
         id:
           type: integer
@@ -1732,6 +1735,12 @@ components:
           type: string
         requested_by:
           type: string
+        viewer_id:
+          type: string
+          description: ID of the authenticated user reading this request.
+        can_execute:
+          type: boolean
+          description: Whether the caller is the requester with ViewEdit and the request is approved.
         created_at:
           type: string
           format: date-time

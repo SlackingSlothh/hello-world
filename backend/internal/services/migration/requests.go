@@ -53,6 +53,10 @@ type RequestStore interface {
 	EnqueueMigrationRequest(ctx context.Context, databaseID string, requestID int64, actorID string, enqueuedAt time.Time, traceContext []byte) (jobID string, created bool, err error)
 }
 
+func (s *Service) CanExecuteMigration(ctx context.Context, principal Principal, databaseID string) bool {
+	return s.authorize(ctx, principal, databaseID, ActionExecuteMigration) == nil
+}
+
 func (s *Service) SubmitMigrationRequest(ctx context.Context, principal Principal, databaseID string, migrationID, revision int64, operation RunOperation) (MigrationRequest, error) {
 	if err := s.authorize(ctx, principal, databaseID, ActionExecuteMigration); err != nil {
 		return MigrationRequest{}, err

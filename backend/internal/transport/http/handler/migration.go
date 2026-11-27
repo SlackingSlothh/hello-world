@@ -20,7 +20,10 @@ func (h *Handler) listMigrations(w http.ResponseWriter, r *http.Request) {
 		writeMigrationError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"database_id": databaseID, "migrations": items})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"database_id": databaseID, "migrations": items,
+		"can_submit": h.migrations.CanExecuteMigration(r.Context(), principal, databaseID),
+	})
 }
 
 func (h *Handler) listMigrationHistory(w http.ResponseWriter, r *http.Request) {
@@ -158,7 +161,7 @@ func (h *Handler) submitMigrationRequest(w http.ResponseWriter, r *http.Request)
 		writeMigrationError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusCreated, request)
+	h.writeMigrationRequest(w, r, http.StatusCreated, principal, request)
 }
 
 func (h *Handler) getMigrationRequest(w http.ResponseWriter, r *http.Request) {
@@ -176,7 +179,7 @@ func (h *Handler) getMigrationRequest(w http.ResponseWriter, r *http.Request) {
 		writeMigrationError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, request)
+	h.writeMigrationRequest(w, r, http.StatusOK, principal, request)
 }
 
 func (h *Handler) approveMigrationRequest(w http.ResponseWriter, r *http.Request) {
@@ -193,7 +196,17 @@ func (h *Handler) approveMigrationRequest(w http.ResponseWriter, r *http.Request
 		writeMigrationError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, request)
+	h.writeMigrationRequest(w, r, http.StatusOK, principal, request)
+}
+
+func (h *Handler) writeMigrationRequest(w http.ResponseWriter, r *http.Request, status int, principal migration.Principal, request migration.MigrationRequest) {
+	canExecute := request.Status == migration.RequestApproved && request.RequestedBy == principal.UserID &&
+		h.migrations.CanExecuteMigration(r.Context(), principal, request.DatabaseID)
+	writeJSON(w, status, struct {
+		migration.MigrationRequest
+		ViewerID   string `json:"viewer_id"`
+		CanExecute bool   `json:"can_execute"`
+	}{MigrationRequest: request, ViewerID: principal.UserID, CanExecute: canExecute})
 }
 
 func (h *Handler) enqueueMigrationRequest(w http.ResponseWriter, r *http.Request) {
