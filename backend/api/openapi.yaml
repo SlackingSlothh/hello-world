@@ -1612,7 +1612,7 @@ components:
           format: date-time
     MigrationRun:
       type: object
-      required: [id, migration_id, database_id, attempt_number, revision, operation, sql_snapshot, status, executed_by, execution_ms, started_at]
+      required: [id, migration_id, database_id, attempt_number, revision, operation, sql_snapshot, sql_dispatch_started, status, executed_by, execution_ms, started_at]
       properties:
         id:
           type: integer
@@ -1637,6 +1637,10 @@ components:
           description: Execution targeted by a rollback attempt. The target is reverted only if the rollback succeeds.
         sql_snapshot:
           type: string
+          description: SQL selected for the attempt.
+        sql_dispatch_started:
+          type: [boolean, "null"]
+          description: True when the executor reached the dispatch step, false before that step, and null for older attempts without dispatch tracking.
         status:
           type: string
           enum: [RUNNING, SUCCEEDED, FAILED]
@@ -1656,7 +1660,7 @@ components:
           format: date-time
     MigrationHistoryEntry:
       type: object
-      required: [id, migration_id, title, reversible, attempt_number, revision, operation, status, sql_snapshot, executed_by, username, started_at, execution_ms]
+      required: [id, migration_id, title, reversible, attempt_number, revision, operation, status, sql_snapshot, sql_dispatch_started, executed_by, username, started_at, execution_ms]
       properties:
         id:
           type: string
@@ -1687,6 +1691,10 @@ components:
           enum: [RUNNING, SUCCEEDED, FAILED]
         sql_snapshot:
           type: string
+          description: SQL selected for the attempt.
+        sql_dispatch_started:
+          type: [boolean, "null"]
+          description: True when the executor reached the dispatch step, false before that step, and null for older attempts without dispatch tracking.
         executed_by:
           type: string
         username:

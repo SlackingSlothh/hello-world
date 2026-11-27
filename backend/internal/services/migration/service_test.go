@@ -49,12 +49,13 @@ func (a *mockAuthorizer) RequireDatabase(_ context.Context, p Principal, databas
 }
 
 type inMemoryStore struct {
-	mu          sync.Mutex
-	nextMigID   int64
-	nextRunID   int64
-	migrations  map[int64]*Migration
-	runsByMigID map[int64][]MigrationRun
-	maxVerByDB  map[string]int64
+	mu            sync.Mutex
+	nextMigID     int64
+	nextRunID     int64
+	migrations    map[int64]*Migration
+	runsByMigID   map[int64][]MigrationRun
+	maxVerByDB    map[string]int64
+	dispatchError error
 }
 
 func newInMemoryStore() *inMemoryStore {
@@ -138,9 +139,27 @@ func (s *inMemoryStore) CreateRun(_ context.Context, run *MigrationRun) error {
 	run.AttemptNumber = len(s.runsByMigID[run.MigrationID]) + 1
 	run.ID = s.nextRunID
 	s.nextRunID++
+	run.SQLDispatchStarted = new(false)
 	cp := *run
 	s.runsByMigID[run.MigrationID] = append(s.runsByMigID[run.MigrationID], cp)
 	return nil
+}
+
+func (s *inMemoryStore) MarkSQLDispatchStarted(_ context.Context, runID int64) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.dispatchError != nil {
+		return s.dispatchError
+	}
+	for _, runs := range s.runsByMigID {
+		for i := range runs {
+			if runs[i].ID == runID && runs[i].Status == RunStatusRunning {
+				runs[i].SQLDispatchStarted = new(true)
+				return nil
+			}
+		}
+	}
+	return ErrNotFound
 }
 
 func (s *inMemoryStore) CompleteRunFailed(_ context.Context, runID, migrationID int64, errMsg string, execMs int64, finishedAt time.Time) error {
@@ -212,6 +231,8 @@ func (s *inMemoryStore) ListMigrationHistory(context.Context, string) ([]History
 
 type mockTargetDB struct {
 	mu             sync.Mutex
+	lockError      error
+	execCalls      int
 	shouldFailSQL  bool
 	failErrMsg     string
 	commitError    error
@@ -239,13 +260,14 @@ func (tx *mockTargetTx) Dialect() TargetDialect {
 }
 
 func (tx *mockTargetTx) AcquireTargetLock(_ context.Context, _ string) error {
-	return nil
+	return tx.parent.lockError
 }
 
 func (tx *mockTargetTx) ExecSQL(_ context.Context, sqlQuery string) error {
 	tx.parent.mu.Lock()
 	defer tx.parent.mu.Unlock()
 
+	tx.parent.execCalls++
 	if tx.parent.shouldFailSQL {
 		return errors.New(tx.parent.failErrMsg)
 	}
@@ -443,6 +465,47 @@ func TestMigrationLifecycle_FailedAttemptFreezesDefinitionAndRetryKeepsHistory(t
 	})
 	if !errors.Is(err, ErrAlreadyApplied) {
 		t.Fatalf("mengubah migrasi yang sudah APPLIED harus ditolak dengan ErrAlreadyApplied")
+	}
+}
+
+func TestMigrationFailureBeforeSQLDispatch(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		lockError     error
+		dispatchError error
+	}{
+		{name: "target lock fails", lockError: errors.New("lock unavailable")},
+		{name: "dispatch marker fails", dispatchError: errors.New("marker unavailable")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			actor := Principal{UserID: "editor"}
+			authz := newMockAuthorizer()
+			authz.Grant(actor.UserID, "db", "VIEW_EDIT")
+			store := newInMemoryStore()
+			store.dispatchError = tc.dispatchError
+			target := &mockTargetDB{lockError: tc.lockError}
+			service := NewService(authz, store, target, nil)
+			draft, err := service.CreateDraft(ctx, actor, CreateDraftInput{
+				DatabaseID: "db", Title: "Create sample", SQLContent: "CREATE TABLE samples (id INT);",
+				SQLDown: "DROP TABLE samples;",
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := service.ExecuteMigration(ctx, actor, "db", draft.ID); !errors.Is(err, ErrExecutionFailed) {
+				t.Fatalf("expected execution to fail before SQL dispatch: %v", err)
+			}
+			detail, err := service.GetMigrationDetail(ctx, actor, "db", draft.ID)
+			if err != nil || len(detail.Runs) != 1 {
+				t.Fatalf("expected one attempt in history: %+v, %v", detail, err)
+			}
+			run := detail.Runs[0]
+			if run.Status != RunStatusFailed || run.SQLDispatchStarted == nil || *run.SQLDispatchStarted ||
+				run.SQLSnapshot != draft.SQLContent || target.execCalls != 0 || target.rolledBackRuns != 1 {
+				t.Fatalf("expected failure before SQL dispatch: %+v, SQL calls %d", run, target.execCalls)
+			}
+		})
 	}
 }
 

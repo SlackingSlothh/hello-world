@@ -118,9 +118,22 @@ func (s *routeMigrationStore) CreateRun(_ context.Context, run *migration.Migrat
 	run.ID = s.nextRunID
 	s.nextRunID++
 	run.AttemptNumber = len(s.runs[run.MigrationID]) + 1
+	run.SQLDispatchStarted = new(false)
 	s.migrations[run.MigrationID].FrozenAt = &run.StartedAt
 	s.runs[run.MigrationID] = append(s.runs[run.MigrationID], *run)
 	return nil
+}
+
+func (s *routeMigrationStore) MarkSQLDispatchStarted(_ context.Context, runID int64) error {
+	for _, runs := range s.runs {
+		for i := range runs {
+			if runs[i].ID == runID {
+				runs[i].SQLDispatchStarted = new(true)
+				return nil
+			}
+		}
+	}
+	return migration.ErrNotFound
 }
 
 func (s *routeMigrationStore) CompleteRunFailed(_ context.Context, _ int64, migrationID int64, _ string, _ int64, finishedAt time.Time) error {
@@ -244,6 +257,9 @@ func TestMigrationRoutes_EndToEndFlow(t *testing.T) {
 	api.ServeHTTP(executeResponse, httptest.NewRequest(http.MethodPost, "/api/v1/connections/connection-1/migrations/1/execute", nil))
 	if executeResponse.Code != http.StatusOK {
 		t.Fatalf("execute migration: got %d: %s", executeResponse.Code, executeResponse.Body.String())
+	}
+	if !strings.Contains(executeResponse.Body.String(), `"sql_dispatch_started":true`) {
+		t.Fatalf("execution should expose the SQL dispatch phase: %s", executeResponse.Body.String())
 	}
 
 	listResponse := httptest.NewRecorder()

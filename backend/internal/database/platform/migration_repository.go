@@ -213,18 +213,25 @@ func (ps *PostgresStore) CreateRun(ctx context.Context, run *migration.Migration
 	const query = `
 		INSERT INTO migration_runs (
 			migration_id, database_id, attempt_number, revision, operation, rollback_target_run_id, sql_snapshot,
-			status, executed_by, execution_ms, started_at
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 0, $10)
-		RETURNING id
+			status, executed_by, execution_ms, started_at, sql_dispatch_started
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 0, $10, FALSE)
+		RETURNING id, sql_dispatch_started
 	`
 	if err := tx.QueryRowContext(
 		ctx, query,
 		run.MigrationID, run.DatabaseID, run.AttemptNumber, run.Revision, run.Operation, run.RollbackTargetRunID, run.SQLSnapshot,
 		string(run.Status), run.ExecutedBy, run.StartedAt,
-	).Scan(&run.ID); err != nil {
+	).Scan(&run.ID, &run.SQLDispatchStarted); err != nil {
 		return err
 	}
 	return tx.Commit()
+}
+
+func (ps *PostgresStore) MarkSQLDispatchStarted(ctx context.Context, runID int64) error {
+	return ps.platformDB.QueryRowContext(ctx, `
+		UPDATE migration_runs SET sql_dispatch_started = TRUE
+		WHERE id = $1 AND status = 'RUNNING' AND sql_dispatch_started IS FALSE
+		RETURNING id`, runID).Scan(&runID)
 }
 
 // The latest successful operation for each version determines its active state.
@@ -352,7 +359,7 @@ func (ps *PostgresStore) CompleteRunSucceeded(ctx context.Context, runID, migrat
 // ListRunsByMigration mengambil seluruh riwayat percobaan eksekusi untuk suatu migration_id
 func (ps *PostgresStore) ListRunsByMigration(ctx context.Context, migrationID int64) ([]migration.MigrationRun, error) {
 	const query = `
-		SELECT id, migration_id, database_id, attempt_number, revision, operation, rollback_target_run_id, sql_snapshot,
+		SELECT id, migration_id, database_id, attempt_number, revision, operation, rollback_target_run_id, sql_snapshot, sql_dispatch_started,
 		       status, executed_by, error_message, execution_ms, started_at, finished_at
 		FROM migration_runs
 		WHERE migration_id = $1
@@ -372,7 +379,7 @@ func (ps *PostgresStore) ListRunsByMigration(ctx context.Context, migrationID in
 		var finishedAt sql.NullTime
 
 		if err := rows.Scan(
-			&r.ID, &r.MigrationID, &r.DatabaseID, &r.AttemptNumber, &r.Revision, &r.Operation, &r.RollbackTargetRunID, &r.SQLSnapshot,
+			&r.ID, &r.MigrationID, &r.DatabaseID, &r.AttemptNumber, &r.Revision, &r.Operation, &r.RollbackTargetRunID, &r.SQLSnapshot, &r.SQLDispatchStarted,
 			&statusStr, &r.ExecutedBy, &errMsg, &r.ExecutionMs, &r.StartedAt, &finishedAt,
 		); err != nil {
 			return nil, err
@@ -396,7 +403,7 @@ func (ps *PostgresStore) ListMigrationHistory(ctx context.Context, databaseID st
 		SELECT r.id, r.migration_id, m.title, m.sql_down <> '',
 		       CASE WHEN r.operation <> 'APPLY' OR r.status = 'SUCCEEDED' THEN m.version END,
 		       r.attempt_number, r.revision, r.operation, r.rollback_target_run_id, r.status,
-		       r.sql_snapshot, r.executed_by, u.username, r.started_at, r.finished_at, r.execution_ms
+		       r.sql_snapshot, r.sql_dispatch_started, r.executed_by, u.username, r.started_at, r.finished_at, r.execution_ms
 		FROM migration_runs r
 		JOIN migrations m ON m.id = r.migration_id
 		JOIN platform_users u ON u.id = r.executed_by
@@ -412,7 +419,7 @@ func (ps *PostgresStore) ListMigrationHistory(ctx context.Context, databaseID st
 		var entry migration.HistoryEntry
 		if err := rows.Scan(&entry.ID, &entry.MigrationID, &entry.Title, &entry.Reversible, &entry.Version,
 			&entry.AttemptNumber, &entry.Revision, &entry.Operation, &entry.RollbackTargetRunID,
-			&entry.Status, &entry.SQLSnapshot, &entry.ExecutedBy, &entry.Username,
+			&entry.Status, &entry.SQLSnapshot, &entry.SQLDispatchStarted, &entry.ExecutedBy, &entry.Username,
 			&entry.StartedAt, &entry.FinishedAt, &entry.ExecutionMs); err != nil {
 			return nil, err
 		}

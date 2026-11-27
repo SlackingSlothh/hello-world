@@ -118,7 +118,8 @@ type MigrationRun struct {
 	Revision            int64        `json:"revision"`
 	Operation           RunOperation `json:"operation"`
 	RollbackTargetRunID *int64       `json:"rollback_target_run_id,omitempty"`
-	SQLSnapshot         string       `json:"sql_snapshot"` // salinan sql saat percobaan dijalankan
+	SQLSnapshot         string       `json:"sql_snapshot"`
+	SQLDispatchStarted  *bool        `json:"sql_dispatch_started"`
 	Status              RunStatus    `json:"status"`
 	ExecutedBy          string       `json:"executed_by"`
 	ErrorMessage        *string      `json:"error_message,omitempty"`
@@ -145,6 +146,7 @@ type HistoryEntry struct {
 	RollbackTargetRunID *string      `json:"rollback_target_run_id,omitempty"`
 	Status              RunStatus    `json:"status"`
 	SQLSnapshot         string       `json:"sql_snapshot"`
+	SQLDispatchStarted  *bool        `json:"sql_dispatch_started"`
 	ExecutedBy          string       `json:"executed_by"`
 	Username            string       `json:"username"`
 	StartedAt           time.Time    `json:"started_at"`
@@ -193,6 +195,7 @@ type Store interface {
 	UpdateDraftSQL(ctx context.Context, m *Migration) error
 
 	CreateRun(ctx context.Context, run *MigrationRun) error
+	MarkSQLDispatchStarted(ctx context.Context, runID int64) error
 	CompleteRunFailed(ctx context.Context, runID, migrationID int64, errMsg string, execMs int64, finishedAt time.Time) error
 	CompleteRunSucceeded(ctx context.Context, runID, migrationID int64, databaseID string, execMs int64, finishedAt time.Time) (assignedVersion int64, err error)
 	ListRunsByMigration(ctx context.Context, migrationID int64) ([]MigrationRun, error)
@@ -820,6 +823,13 @@ func (s *Service) execute(ctx context.Context, principal Principal, databaseID s
 		return s.failRun(ctx, m, run, startTime, errors.Join(fmt.Errorf("gagal mengunci urutan migrasi pada database target: %w", err), rollbackErr))
 	}
 
+	if err := s.store.MarkSQLDispatchStarted(ctx, run.ID); err != nil {
+		rollbackErr := tx.Rollback(ctx)
+		committed = true
+		s.logTargetRollback(ctx, m, run, rollbackErr)
+		return s.failRun(ctx, m, run, startTime, errors.Join(fmt.Errorf("record SQL dispatch start: %w", err), rollbackErr))
+	}
+	run.SQLDispatchStarted = new(true)
 	sqlStartedAt := s.nowFn()
 	loggedSQL := ""
 	if s.audit != nil {

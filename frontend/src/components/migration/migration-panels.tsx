@@ -91,12 +91,23 @@ export function MigrationHistory({ records }: { records: MigrationHistoryEntry[]
       id: "sql",
       header: "SQL snapshot",
       cell: (item) => (
-        <details>
-          <summary className="cursor-pointer underline">View SQL</summary>
-          <pre className="mt-2 max-h-52 w-64 max-w-[70vw] overflow-auto whitespace-pre-wrap break-all rounded bg-muted p-2 text-xs">
-            {item.sql_snapshot}
-          </pre>
-        </details>
+        <div>
+          <p className="text-xs text-muted-foreground">
+            {item.sql_dispatch_started === true
+              ? "Dispatch started"
+              : item.sql_dispatch_started === false
+                ? "Dispatch not started"
+                : "Dispatch not recorded"}
+          </p>
+          <details>
+            <summary className="cursor-pointer underline">
+              {item.sql_dispatch_started === false ? "View planned SQL" : "View SQL snapshot"}
+            </summary>
+            <pre className="mt-2 max-h-52 w-64 max-w-[70vw] overflow-auto whitespace-pre-wrap break-all rounded bg-muted p-2 text-xs">
+              {item.sql_snapshot}
+            </pre>
+          </details>
+        </div>
       ),
     },
   ];
