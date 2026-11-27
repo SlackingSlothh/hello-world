@@ -930,7 +930,11 @@ func (s *Service) ForwardMigration(ctx context.Context, principal Principal, dat
 	return s.execute(ctx, principal, databaseID, migrationID, RunForward)
 }
 
-func (s *Service) execute(ctx context.Context, principal Principal, databaseID string, migrationID int64, operation RunOperation) (_ *ExecuteResult, outcomeErr error) {
+func (s *Service) execute(ctx context.Context, principal Principal, databaseID string, migrationID int64, operation RunOperation) (*ExecuteResult, error) {
+	return s.executeWithJob(ctx, principal, databaseID, migrationID, operation, nil, nil)
+}
+
+func (s *Service) executeWithJob(ctx context.Context, principal Principal, databaseID string, migrationID int64, operation RunOperation, jobID, executionUUID *string) (_ *ExecuteResult, outcomeErr error) {
 	if err := s.authorize(ctx, principal, databaseID, ActionExecuteMigration); err != nil {
 		return nil, err
 	}
@@ -978,16 +982,17 @@ func (s *Service) execute(ctx context.Context, principal Principal, databaseID s
 		}
 	}
 
-	// catat awal percobaan eksekusi di database platform
 	run := &MigrationRun{
-		MigrationID: m.ID,
-		DatabaseID:  databaseID,
-		Revision:    m.Revision,
-		Operation:   operation,
-		SQLSnapshot: sqlContent,
-		Status:      RunStatusRunning,
-		ExecutedBy:  principal.UserID,
-		StartedAt:   startTime,
+		MigrationID:   m.ID,
+		DatabaseID:    databaseID,
+		JobID:         jobID,
+		ExecutionUUID: executionUUID,
+		Revision:      m.Revision,
+		Operation:     operation,
+		SQLSnapshot:   sqlContent,
+		Status:        RunStatusRunning,
+		ExecutedBy:    principal.UserID,
+		StartedAt:     startTime,
 	}
 	if err := s.store.CreateRun(ctx, run); err != nil {
 		return nil, err
