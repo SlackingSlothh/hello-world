@@ -19,6 +19,8 @@ const statusVariants: Record<
   partially_committed: "destructive",
   partially_reverted: "destructive",
   partially_applied: "destructive",
+  partial: "destructive",
+  uncertain: "destructive",
   failed: "destructive",
   rejected: "destructive",
   disconnected: "outline",
