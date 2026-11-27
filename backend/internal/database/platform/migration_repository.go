@@ -227,11 +227,28 @@ func (ps *PostgresStore) CreateRun(ctx context.Context, run *migration.Migration
 	return tx.Commit()
 }
 
-func (ps *PostgresStore) MarkSQLDispatchStarted(ctx context.Context, runID int64) error {
+func (ps *PostgresStore) MarkSQLDispatchStarted(ctx context.Context, runID int64, evidence migration.TransactionEvidence) error {
 	return ps.platformDB.QueryRowContext(ctx, `
-		UPDATE migration_runs SET sql_dispatch_started = TRUE
+		UPDATE migration_runs
+		SET sql_dispatch_started = TRUE, target_xact_id = NULLIF($2, ''), target_identity = NULLIF($3, '')
 		WHERE id = $1 AND status = 'RUNNING' AND sql_dispatch_started IS FALSE
-		RETURNING id`, runID).Scan(&runID)
+		RETURNING id`, runID, evidence.XactID, evidence.TargetIdentity).Scan(&runID)
+}
+
+func (ps *PostgresStore) GetRunForReconciliation(ctx context.Context, databaseID string, runID int64) (migration.MigrationRun, migration.TransactionEvidence, error) {
+	var run migration.MigrationRun
+	var evidence migration.TransactionEvidence
+	err := ps.platformDB.QueryRowContext(ctx, `
+		SELECT id, migration_id, database_id, attempt_number, revision, operation, status, execution_ms,
+		       COALESCE(target_xact_id, ''), COALESCE(target_identity, '')
+		FROM migration_runs
+		WHERE database_id = $1 AND id = $2`, databaseID, runID,
+	).Scan(&run.ID, &run.MigrationID, &run.DatabaseID, &run.AttemptNumber, &run.Revision, &run.Operation,
+		&run.Status, &run.ExecutionMs, &evidence.XactID, &evidence.TargetIdentity)
+	if errors.Is(err, sql.ErrNoRows) {
+		err = migration.ErrNotFound
+	}
+	return run, evidence, err
 }
 
 // The latest successful operation for each version determines its active state.

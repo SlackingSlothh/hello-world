@@ -153,6 +153,25 @@ func (s unavailableMigrationHistory) CompleteRunSucceeded(context.Context, int64
 	return 0, errors.New("platform history unavailable")
 }
 
+type pausedFailedMigrationHistory struct {
+	migration.Store
+	dispatched chan int64
+	resume     chan struct{}
+}
+
+func (s pausedFailedMigrationHistory) MarkSQLDispatchStarted(ctx context.Context, runID int64, evidence migration.TransactionEvidence) error {
+	if err := s.Store.MarkSQLDispatchStarted(ctx, runID, evidence); err != nil {
+		return err
+	}
+	s.dispatched <- runID
+	<-s.resume
+	return nil
+}
+
+func (s pausedFailedMigrationHistory) CompleteRunFailed(context.Context, int64, int64, string, int64, time.Time) error {
+	return errors.New("platform history unavailable")
+}
+
 func TestMigrationDatabaseReservation(t *testing.T) {
 	platformDB, targetDB := migrationTestDatabases(t)
 	execSQL(t, targetDB, `CREATE TABLE samples (id INT PRIMARY KEY)`)
@@ -215,6 +234,102 @@ func TestMigrationDatabaseReservation(t *testing.T) {
 	detail, err := service.GetMigrationDetail(ctx, actor, "db", b.ID)
 	if err != nil || len(detail.Runs) != 1 || detail.Runs[0].Status != migration.RunStatusRunning {
 		t.Fatalf("the committed target attempt should remain reserved until verified: %+v, %v", detail, err)
+	}
+	runID := detail.Runs[0].ID
+	if _, err := service.ReconcileRun(ctx, actor, "other-db", runID); !errors.Is(err, migration.ErrNotFound) {
+		t.Fatalf("a connection cannot reconcile a run belonging to a different connection: %v", err)
+	}
+	reconciled := make(chan error, 2)
+	for range 2 {
+		go func() {
+			restarted := migration.NewService(authorizer, store, connector, nil)
+			result, err := restarted.ReconcileRun(ctx, actor, "db", runID)
+			if err == nil && (result.ExecutionID != strconv.FormatInt(runID, 10) || result.Status != migration.RunStatusSucceeded) {
+				err = fmt.Errorf("unexpected reconciliation result: %+v", result)
+			}
+			reconciled <- err
+		}()
+	}
+	for range 2 {
+		if err := <-reconciled; err != nil {
+			t.Fatal(err)
+		}
+	}
+	detail, err = service.GetMigrationDetail(ctx, actor, "db", b.ID)
+	if err != nil || len(detail.Runs) != 1 || detail.Runs[0].ID != runID ||
+		detail.Runs[0].Status != migration.RunStatusSucceeded || detail.Migration.Version == nil || *detail.Migration.Version != 2 {
+		t.Fatalf("reconciliation should finalize the original attempt and assign version 2 once: %+v, %v", detail, err)
+	}
+	if err := targetDB.QueryRow(`SELECT count(*) FROM samples WHERE id = 2`).Scan(&count); err != nil || count != 1 {
+		t.Fatalf("reconciliation should never execute the target SQL: count %d, error %v", count, err)
+	}
+	if _, err := service.ExecuteMigration(ctx, actor, "db", c.ID); err != nil {
+		t.Fatalf("reconciliation should release the database reservation: %v", err)
+	}
+}
+
+func TestMigrationReconciliationOfAbortedTransaction(t *testing.T) {
+	platformDB, targetDB := migrationTestDatabases(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	actor := migration.Principal{UserID: "editor"}
+	store := persistence.NewPostgresStore(platformDB)
+	connector := target.NewSQLTargetConnector(func(context.Context, string) (*sql.DB, error) { return targetDB, nil })
+	authorizer := migration.AuthorizerFunc(func(context.Context, migration.Principal, string, migration.Action) error { return nil })
+	service := migration.NewService(authorizer, store, connector, nil)
+	draft, err := service.CreateDraft(ctx, actor, migration.CreateDraftInput{
+		DatabaseID: "db", Title: "Insert sample", SQLContent: "INSERT INTO samples VALUES (1);",
+		SQLDown: "DELETE FROM samples WHERE id = 1;",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	paused := pausedFailedMigrationHistory{store, make(chan int64, 1), make(chan struct{})}
+	executor := migration.NewService(authorizer, paused, connector, nil)
+	done := make(chan error, 1)
+	go func() {
+		_, err := executor.ExecuteMigration(ctx, actor, "db", draft.ID)
+		done <- err
+	}()
+	var runID int64
+	select {
+	case runID = <-paused.dispatched:
+	case err := <-done:
+		t.Fatalf("execution stopped before recording evidence: %v", err)
+	case <-ctx.Done():
+		close(paused.resume)
+		<-done
+		t.Fatal(ctx.Err())
+	}
+	_, pendingErr := service.ReconcileRun(ctx, actor, "db", runID)
+	close(paused.resume)
+	if err := <-done; !errors.Is(err, migration.ErrOutcomeUnconfirmed) {
+		t.Fatalf("failure recording the aborted attempt should leave it unconfirmed: %v", err)
+	}
+	if !errors.Is(pendingErr, migration.ErrOutcomeUnconfirmed) {
+		t.Fatalf("reconciliation should leave an in-progress PostgreSQL transaction alone: %v", pendingErr)
+	}
+
+	_, evidence, err := store.GetRunForReconciliation(ctx, "db", runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	evidence.TargetIdentity += "-different-timeline"
+	if outcome, err := connector.VerifyTransaction(ctx, "db", evidence); err != nil || outcome != "" {
+		t.Fatalf("evidence from another target identity should give no outcome: %q, %v", outcome, err)
+	}
+	result, err := service.ReconcileRun(ctx, actor, "db", runID)
+	if err != nil || result.Status != migration.RunStatusFailed || result.ExecutionID != strconv.FormatInt(runID, 10) {
+		t.Fatalf("reconciliation should mark the same run failed: %+v, %v", result, err)
+	}
+	detail, err := service.GetMigrationDetail(ctx, actor, "db", draft.ID)
+	if err != nil || detail.Migration.Status != migration.StatusFailed || detail.Migration.Version != nil ||
+		len(detail.Runs) != 1 || detail.Runs[0].Status != migration.RunStatusFailed {
+		t.Fatalf("an aborted initial attempt should have no version: %+v, %v", detail, err)
+	}
+	execSQL(t, targetDB, `CREATE TABLE samples (id INT PRIMARY KEY)`)
+	if retried, err := service.ExecuteMigration(ctx, actor, "db", draft.ID); err != nil || retried.Run.AttemptNumber != 2 {
+		t.Fatalf("a confirmed abort should allow an explicit retry: %+v, %v", retried, err)
 	}
 }
 

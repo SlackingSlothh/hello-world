@@ -195,7 +195,8 @@ type Store interface {
 	UpdateDraftSQL(ctx context.Context, m *Migration) error
 
 	CreateRun(ctx context.Context, run *MigrationRun) error
-	MarkSQLDispatchStarted(ctx context.Context, runID int64) error
+	MarkSQLDispatchStarted(ctx context.Context, runID int64, evidence TransactionEvidence) error
+	GetRunForReconciliation(ctx context.Context, databaseID string, runID int64) (MigrationRun, TransactionEvidence, error)
 	CompleteRunFailed(ctx context.Context, runID, migrationID int64, errMsg string, execMs int64, finishedAt time.Time) error
 	CompleteRunSucceeded(ctx context.Context, runID, migrationID int64, databaseID string, execMs int64, finishedAt time.Time) (assignedVersion int64, err error)
 	ListRunsByMigration(ctx context.Context, migrationID int64) ([]MigrationRun, error)
@@ -823,7 +824,17 @@ func (s *Service) execute(ctx context.Context, principal Principal, databaseID s
 		return s.failRun(ctx, m, run, startTime, errors.Join(fmt.Errorf("gagal mengunci urutan migrasi pada database target: %w", err), rollbackErr))
 	}
 
-	if err := s.store.MarkSQLDispatchStarted(ctx, run.ID); err != nil {
+	var evidence TransactionEvidence
+	if recorder, ok := tx.(targetTransactionRecorder); ok {
+		evidence, err = recorder.RecordTransactionEvidence(ctx)
+		if err != nil {
+			err = fmt.Errorf("read target transaction evidence: %w", err)
+		}
+	}
+	if err == nil {
+		err = s.store.MarkSQLDispatchStarted(ctx, run.ID, evidence)
+	}
+	if err != nil {
 		rollbackErr := tx.Rollback(ctx)
 		committed = true
 		s.logTargetRollback(ctx, m, run, rollbackErr)
@@ -1274,7 +1285,7 @@ func (s *Service) authorize(ctx context.Context, principal Principal, databaseID
 	if strings.TrimSpace(principal.UserID) == "" {
 		return ErrUnauthorized
 	}
-	if strings.TrimSpace(databaseID) == "" {
+	if strings.TrimSpace(databaseID) == "" && action != authz.ManageConnections {
 		return ErrForbidden
 	}
 	if s.authz == nil {

@@ -145,7 +145,7 @@ func (s *inMemoryStore) CreateRun(_ context.Context, run *MigrationRun) error {
 	return nil
 }
 
-func (s *inMemoryStore) MarkSQLDispatchStarted(_ context.Context, runID int64) error {
+func (s *inMemoryStore) MarkSQLDispatchStarted(_ context.Context, runID int64, _ TransactionEvidence) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.dispatchError != nil {
@@ -160,6 +160,19 @@ func (s *inMemoryStore) MarkSQLDispatchStarted(_ context.Context, runID int64) e
 		}
 	}
 	return ErrNotFound
+}
+
+func (s *inMemoryStore) GetRunForReconciliation(_ context.Context, databaseID string, runID int64) (MigrationRun, TransactionEvidence, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, runs := range s.runsByMigID {
+		for _, run := range runs {
+			if run.ID == runID && run.DatabaseID == databaseID {
+				return run, TransactionEvidence{}, nil
+			}
+		}
+	}
+	return MigrationRun{}, TransactionEvidence{}, ErrNotFound
 }
 
 func (s *inMemoryStore) CompleteRunFailed(_ context.Context, runID, migrationID int64, errMsg string, execMs int64, finishedAt time.Time) error {

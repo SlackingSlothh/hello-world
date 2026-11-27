@@ -3,17 +3,9 @@ info:
   title: DataDock Backend API
   version: 1.0.0
   description: |
-    OpenAPI description of the HTTP routes registered by the backend.
-
-    Protected endpoints use the `session_id` cookie established by
-    `POST /auth/login`. Endpoints under `/api/v1` additionally enforce
-    connection permissions or platform-admin permissions as described per
-    operation.     Mutating requests are same-origin protected.
-
-    Database connection DSNs are accepted on create/update but are never
-    returned in connection representations. MySQL and MariaDB are supported
-    as target databases. The migration runner rejects MySQL/MariaDB statements
-    that can cause implicit commits.
+    Protected routes use the session cookie from `POST /auth/login`. Mutating
+    requests require the configured origin. The API omits connection credentials
+    from responses. MySQL and MariaDB migrations reject implicit-commit statements.
 servers:
   - url: /
     description: Same-origin deployment
@@ -181,7 +173,7 @@ paths:
       tags: [Connections]
       operationId: listAdminConnections
       summary: List all connections for configuration management
-      description: Admin-only. Returns safe connection configuration metadata for every managed connection, independent of database grants. This permission does not grant catalog, schema, query, data, or migration access. DSNs and credentials are omitted.
+      description: Lists connection settings across all databases. Database grants govern access to catalog, query, and migration data.
       security:
         - sessionCookie: []
       x-required-permission: ManageConnections
@@ -198,6 +190,55 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "403":
           $ref: "#/components/responses/Forbidden"
+
+  /api/v1/admin/connections/{id}/migration-runs/{runID}/reconcile:
+    post:
+      tags: [Migrations]
+      operationId: reconcileMigrationRun
+      summary: Reconcile an unconfirmed PostgreSQL migration execution
+      description: Confirms the outcome of the original PostgreSQL transaction without rerunning migration SQL. Repeated requests return the saved status.
+      security:
+        - sessionCookie: []
+      x-required-permission: ManageConnections
+      parameters:
+        - $ref: "#/components/parameters/ConnectionID"
+        - name: runID
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+            minimum: 1
+      responses:
+        "200":
+          description: Status of the existing execution.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [execution_id, status]
+                properties:
+                  execution_id:
+                    type: string
+                  status:
+                    type: string
+                    enum: [SUCCEEDED, FAILED]
+        "400":
+          $ref: "#/components/responses/InvalidRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: The outcome is still unconfirmed and the connection remains reserved.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          $ref: "#/components/responses/OperationFailed"
 
   /api/v1/connections/{id}:
     parameters:
