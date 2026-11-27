@@ -3,9 +3,8 @@ const idPattern = /^[a-zA-Z0-9_-]+$/;
 function allowed(method: string, path: string[]) {
   const [resource, groupId, action, userId] = path;
   if (path.length === 1) {
-    return resource === "users"
-      ? method === "GET"
-      : resource === "groups" && (method === "GET" || method === "POST");
+    return (resource === "users" || resource === "groups") &&
+      (method === "GET" || method === "POST");
   }
   if (resource !== "groups" || !groupId || !idPattern.test(groupId)) {
     return false;

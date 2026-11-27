@@ -5,6 +5,7 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from "react";
 import { toast } from "sonner";
@@ -29,6 +30,7 @@ import {
   type LoginFormValues,
 } from "@/components/auth/auth-form";
 import {
+  DatabaseList,
   DatabaseWorkspaceShell,
   QueryResults,
   SchemaTree,
@@ -58,7 +60,21 @@ import {
   updateConnection,
 } from "@/lib/api/admin";
 import { login } from "@/lib/api/auth";
-import type { MockQueryRow, MockTableRow } from "@/lib/mock-data";
+import {
+  executeDatabaseQuery,
+  getDatabaseConnection,
+  listDatabaseConnections,
+  loadDatabaseColumns,
+  loadDatabaseConstraints,
+  loadDatabaseIndexes,
+  loadDatabaseRows,
+  loadDatabaseSchemas,
+  type DatabaseColumn,
+  type DatabaseConstraint,
+  type DatabaseIndex,
+  type DatabaseQueryResult,
+  type DatabaseRowsPage,
+} from "@/lib/api/database";
 
 export function AuthPageForm({
   nextPath,
@@ -486,66 +502,270 @@ export function AccessManagement() {
   );
 }
 
+export function DatabaseDirectoryClient() {
+  const [databases, setDatabases] = useState<DatabaseSummary[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string>();
+
+  const refresh = useCallback(async () => {
+    setLoading(true);
+    setError(undefined);
+    try {
+      setDatabases(await listDatabaseConnections());
+    } catch (loadError) {
+      setError(errorMessage(loadError, "Could not load databases."));
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    listDatabaseConnections(controller.signal)
+      .then((items) => {
+        if (!controller.signal.aborted) setDatabases(items);
+      })
+      .catch((loadError: unknown) => {
+        if (!controller.signal.aborted) {
+          setError(errorMessage(loadError, "Could not load databases."));
+        }
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setLoading(false);
+      });
+    return () => controller.abort();
+  }, []);
+
+  if (loading) return <LoadingState label="Loading available databases" />;
+  if (error) {
+    return (
+      <ErrorState
+        message={error}
+        onRetry={() => void refresh()}
+        title="Could not load databases"
+      />
+    );
+  }
+  return <DatabaseList databases={databases} />;
+}
+
 export function DatabaseWorkspace({
-  database,
-  schemas,
+  id,
   activeTab,
-  tableRows,
-  queryRows,
 }: {
-  database: DatabaseSummary;
-  schemas: SchemaNode[];
+  id: string;
   activeTab: WorkspaceTab;
-  tableRows: MockTableRow[];
-  queryRows: MockQueryRow[];
 }) {
+  const [loadedWorkspace, setLoadedWorkspace] = useState<{
+    key: string;
+    database: DatabaseSummary;
+    schemas: SchemaNode[];
+  }>();
+  const [loadError, setLoadError] = useState<{ key: string; message: string }>();
+  const [reload, setReload] = useState(0);
+  const loadKey = `${id}:${reload}`;
+
+  useEffect(() => {
+    const controller = new AbortController();
+    Promise.all([
+      getDatabaseConnection(id, controller.signal),
+      loadDatabaseSchemas(id, controller.signal),
+    ])
+      .then(([connection, loadedSchemas]) => {
+        setLoadedWorkspace({
+          key: loadKey,
+          database: connection,
+          schemas: loadedSchemas,
+        });
+      })
+      .catch((loadError: unknown) => {
+        if (!controller.signal.aborted) {
+          setLoadError({
+            key: loadKey,
+            message: errorMessage(loadError, "Could not load this database."),
+          });
+        }
+      });
+    return () => controller.abort();
+  }, [id, loadKey]);
+
+  const currentWorkspace =
+    loadedWorkspace?.key === loadKey ? loadedWorkspace : undefined;
+  const currentError = loadError?.key === loadKey ? loadError.message : undefined;
+  if (!currentWorkspace && !currentError) {
+    return <LoadingState label="Loading database workspace" rows={5} />;
+  }
+  if (currentError || !currentWorkspace) {
+    return (
+      <ErrorState
+        message={currentError ?? "This database is unavailable."}
+        onRetry={() => setReload((current) => current + 1)}
+        title="Could not load database"
+      />
+    );
+  }
+
   return (
-    <DatabaseWorkspaceShell activeTab={activeTab} database={database}>
+    <DatabaseWorkspaceShell
+      activeTab={activeTab}
+      database={currentWorkspace.database}
+    >
       {activeTab === "schema" ? (
-        <SchemaWorkspace rows={tableRows} schemas={schemas} />
-      ) : null}
-      {activeTab === "query" ? <QueryWorkspace rows={queryRows} /> : null}
+        <SchemaWorkspace databaseId={id} schemas={currentWorkspace.schemas} />
+      ) : (
+        <QueryWorkspace databaseId={id} />
+      )}
     </DatabaseWorkspaceShell>
   );
 }
 
+type TableSelection = { schema: string; table: string };
+type ViewerRow = { key: string; values: unknown[] };
+const tablePageSize = 50;
+type TableDetailsPayload = {
+  rowsPage?: DatabaseRowsPage;
+  columns?: DatabaseColumn[];
+  constraints?: DatabaseConstraint[];
+  indexes?: DatabaseIndex[];
+};
+
 function SchemaWorkspace({
+  databaseId,
   schemas,
-  rows,
 }: {
+  databaseId: string;
   schemas: SchemaNode[];
-  rows: MockTableRow[];
 }) {
-  const [selection, setSelection] = useState<{
-    schema: string;
-    table: string;
-  }>();
+  const [selection, setSelection] = useState<TableSelection>();
   const [tab, setTab] = useState<TableDetailTab>("data");
-  const columns = useMemo(
-    () => [
-      { id: "id", header: "ID", cell: (row: { id: string }) => row.id },
-      { id: "name", header: "Name", cell: (row: { name: string }) => row.name },
-      {
-        id: "email",
-        header: "Email",
-        cell: (row: { email: string }) => row.email,
-      },
-      {
-        id: "status",
-        header: "Status",
-        cell: (row: { status: string }) => row.status,
-      },
-    ],
-    [],
+  const [page, setPage] = useState(1);
+  const [sort, setSort] = useState<{ column: string; direction: "asc" | "desc" }>();
+  const [loadedDetails, setLoadedDetails] = useState<{
+    key: string;
+    data: TableDetailsPayload;
+  }>();
+  const [loadError, setLoadError] = useState<{ key: string; message: string }>();
+  const [requestVersion, setRequestVersion] = useState(0);
+  const detailsKey = JSON.stringify([
+    databaseId,
+    selection?.schema,
+    selection?.table,
+    tab,
+    page,
+    sort?.column,
+    sort?.direction,
+    requestVersion,
+  ]);
+
+  useEffect(() => {
+    if (!selection) return;
+    const controller = new AbortController();
+    const request =
+      tab === "data"
+        ? loadDatabaseRows(
+            databaseId,
+            selection.schema,
+            selection.table,
+            {
+              limit: tablePageSize + 1,
+              offset: (page - 1) * tablePageSize,
+              sort: sort?.column,
+              direction: sort?.direction,
+            },
+            controller.signal,
+          ).then((rowsPage) => ({ rowsPage }))
+        : tab === "columns"
+          ? loadDatabaseColumns(
+              databaseId,
+              selection.schema,
+              selection.table,
+              controller.signal,
+            ).then((columns) => ({ columns }))
+          : tab === "constraints"
+            ? loadDatabaseConstraints(
+                databaseId,
+                selection.schema,
+                selection.table,
+                controller.signal,
+              ).then((constraints) => ({ constraints }))
+            : loadDatabaseIndexes(
+                databaseId,
+                selection.schema,
+                selection.table,
+                controller.signal,
+              ).then((indexes) => ({ indexes }));
+
+    request
+      .then((data) => {
+        setLoadedDetails({ key: detailsKey, data });
+      })
+      .catch((loadError: unknown) => {
+        if (!controller.signal.aborted) {
+          setLoadError({
+            key: detailsKey,
+            message: errorMessage(loadError, "Could not load table details."),
+          });
+        }
+      });
+    return () => controller.abort();
+  }, [databaseId, detailsKey, page, requestVersion, selection, sort, tab]);
+
+  const currentDetails =
+    loadedDetails?.key === detailsKey ? loadedDetails.data : undefined;
+  const currentError =
+    loadError?.key === detailsKey ? loadError.message : undefined;
+  const loading = Boolean(selection && !currentDetails && !currentError);
+  const rowsPage = currentDetails?.rowsPage;
+  const columnsInfo = currentDetails?.columns ?? [];
+  const constraints = currentDetails?.constraints ?? [];
+  const indexes = currentDetails?.indexes ?? [];
+
+  const rows = useMemo(
+    () =>
+      (rowsPage?.rows ?? [])
+        .slice(0, tablePageSize)
+        .map((values, index) => ({
+          key: String((rowsPage?.offset ?? 0) + index),
+          values,
+        })),
+    [rowsPage],
   );
+  const dataColumns = useMemo(
+    () =>
+      (rowsPage?.columns ?? []).map((name, index) => ({
+        id: name,
+        header: name,
+        cell: (row: ViewerRow) => formatDatabaseValue(row.values[index]),
+      })),
+    [rowsPage?.columns],
+  );
+  const hasNext = (rowsPage?.rows.length ?? 0) > tablePageSize;
+
+  function selectTable(schema: string, table: string) {
+    setSelection({ schema, table });
+    setTab("data");
+    setPage(1);
+    setSort(undefined);
+  }
+
+  function changeSort(column: string) {
+    setSort((current) => ({
+      column,
+      direction:
+        current?.column === column && current.direction === "asc"
+          ? "desc"
+          : "asc",
+    }));
+    setPage(1);
+  }
+
   return (
     <div className="grid gap-5 lg:grid-cols-[260px_minmax(0,1fr)]">
       <SchemaTree
-        onSelect={(schema, table) => setSelection({ schema, table })}
+        onSelect={selectTable}
         schemas={schemas}
         selectedSchema={selection?.schema}
         selectedTable={selection?.table}
-        singleLevel={schemas.length === 1 && schemas[0]?.name === "sample"}
       />
       {selection ? (
         <section className="min-w-0 space-y-4">
@@ -555,20 +775,40 @@ function SchemaWorkspace({
               Schema: {selection.schema}
             </p>
           </div>
-          <TableDetailsTabs activeTab={tab} onTabChange={setTab}>
-            {tab === "data" ? (
+          <TableDetailsTabs
+            activeTab={tab}
+            onTabChange={(nextTab) => {
+              setTab(nextTab);
+              setPage(1);
+            }}
+          >
+            {currentError ? (
+              <ErrorState
+                message={currentError}
+                onRetry={() => setRequestVersion((current) => current + 1)}
+                title="Could not load table details"
+              />
+            ) : loading ? (
+              <LoadingState label={`Loading table ${tab}`} rows={3} />
+            ) : tab === "data" ? (
               <TableDataGrid
-                columns={columns}
-                getRowId={(row) => row.id}
-                onPageChange={() => undefined}
-                onSort={() => toast.info("Mock sorting selected.")}
-                page={1}
-                pageSize={50}
+                columns={dataColumns}
+                getRowId={(row) => row.key}
+                hasNext={hasNext}
+                onPageChange={setPage}
+                onSort={changeSort}
+                page={page}
+                pageSize={tablePageSize}
                 rows={rows}
-                total={rows.length}
+                total={(rowsPage?.offset ?? 0) + rows.length}
               />
             ) : (
-              <DataDetails tab={tab} />
+              <TableMetadata
+                columns={columnsInfo}
+                constraints={constraints}
+                indexes={indexes}
+                tab={tab}
+              />
             )}
           </TableDetailsTabs>
         </section>
@@ -582,26 +822,38 @@ function SchemaWorkspace({
   );
 }
 
-function DataDetails({ tab }: { tab: TableDetailTab }) {
-  const details = {
-    columns: [
-      "id · uuid · primary key",
-      "name · text · not null",
-      "email · text · unique",
-    ],
-    constraints: [
-      "customers_pkey · PRIMARY KEY (id)",
-      "customers_email_key · UNIQUE (email)",
-    ],
-    indices: [
-      "customers_pkey · btree (id)",
-      "customers_email_key · btree (email)",
-    ],
-    data: [],
-  }[tab];
+function TableMetadata({
+  tab,
+  columns,
+  constraints,
+  indexes,
+}: {
+  tab: TableDetailTab;
+  columns: DatabaseColumn[];
+  constraints: DatabaseConstraint[];
+  indexes: DatabaseIndex[];
+}) {
+  const items =
+    tab === "columns"
+      ? columns.map(
+          (column) =>
+            `${column.name} · ${column.type} · ${column.nullable ? "nullable" : "not null"}${column.default === undefined ? "" : ` · default ${formatDatabaseValue(column.default)}`}`,
+        )
+      : tab === "constraints"
+        ? constraints.map(
+            (constraint) =>
+              `${constraint.name} · ${constraint.definition || `${constraint.type} (${constraint.columns.join(", ")})`}`,
+          )
+        : indexes.map(
+            (index) =>
+              `${index.name} · ${index.unique ? "unique " : ""}${index.method || "index"} (${index.columns.join(", ")})`,
+          );
+  if (items.length === 0) {
+    return <EmptyState title={`No ${tab} found`} />;
+  }
   return (
     <ul className="divide-y rounded-lg border bg-background">
-      {details.map((item) => (
+      {items.map((item) => (
         <li className="p-3 text-sm" key={item}>
           {item}
         </li>
@@ -610,51 +862,97 @@ function DataDetails({ tab }: { tab: TableDetailTab }) {
   );
 }
 
-function QueryWorkspace({ rows }: { rows: MockQueryRow[] }) {
-  const [sql, setSql] = useState(
-    "SELECT id, name, email, status FROM customers LIMIT 100;",
-  );
-  const [hasRun, setHasRun] = useState(false);
+function formatDatabaseValue(value: unknown): string {
+  if (value === null) return "NULL";
+  if (typeof value === "string") return value;
+  if (typeof value === "object") return JSON.stringify(value) ?? String(value);
+  return String(value);
+}
+
+function QueryWorkspace({ databaseId }: { databaseId: string }) {
+  const [sql, setSql] = useState("SELECT 1;");
+  const [result, setResult] = useState<DatabaseQueryResult>();
+  const [elapsedMs, setElapsedMs] = useState<number>();
+  const [error, setError] = useState<string>();
   const [running, setRunning] = useState(false);
-  const columns = useMemo(
-    () => [
-      { id: "id", header: "ID", cell: (row: { id: number }) => row.id },
-      { id: "name", header: "Name", cell: (row: { name: string }) => row.name },
-      {
-        id: "status",
-        header: "Status",
-        cell: (row: { status: string }) => row.status,
-      },
-    ],
+  const queryController = useRef<AbortController | undefined>(undefined);
+
+  useEffect(
+    () => () => queryController.current?.abort(),
     [],
   );
+
+  const columns = useMemo(
+    () =>
+      (result?.columns ?? []).map((name, index) => ({
+        id: `${index}-${name}`,
+        header: name,
+        cell: (row: ViewerRow) => formatDatabaseValue(row.values[index]),
+      })),
+    [result?.columns],
+  );
+  const rows = useMemo(
+    () =>
+      (result?.rows ?? []).map((values, index) => ({
+        key: String(index),
+        values,
+      })),
+    [result?.rows],
+  );
+
   async function runQuery() {
+    const controller = new AbortController();
+    queryController.current = controller;
     setRunning(true);
-    await new Promise((resolve) => setTimeout(resolve, 400));
+    setError(undefined);
+    setResult(undefined);
+    setElapsedMs(undefined);
+    const started = performance.now();
+    try {
+      const queryResult = await executeDatabaseQuery(
+        databaseId,
+        sql,
+        controller.signal,
+      );
+      setResult(queryResult);
+      setElapsedMs(Math.round(performance.now() - started));
+    } catch (queryError) {
+      if (!controller.signal.aborted) {
+        setError(errorMessage(queryError, "Could not run the query."));
+      }
+    } finally {
+      if (queryController.current === controller) {
+        queryController.current = undefined;
+        setRunning(false);
+      }
+    }
+  }
+
+  function cancelQuery() {
+    queryController.current?.abort();
+    queryController.current = undefined;
     setRunning(false);
-    setHasRun(true);
-    toast.success("Mock read-only query completed.");
+    toast.info("Query cancelled.");
   }
 
   return (
     <div className="space-y-6">
       <SqlEditor
-        onCancel={() => {
-          setRunning(false);
-          toast.info("Mock query cancelled.");
-        }}
+        onCancel={cancelQuery}
         onChange={setSql}
         onRun={() => void runQuery()}
         running={running}
         value={sql}
       />
-      {hasRun ? (
+      {error ? (
+        <ErrorState message={error} title="Query failed" />
+      ) : result ? (
         <QueryResults
           columns={columns}
-          getRowId={(row) => String(row.id)}
+          getRowId={(row) => row.key}
           rows={rows}
-          elapsedMs={18}
-          truncated={false}
+          elapsedMs={elapsedMs}
+          truncated={result.rows.length === 500}
         />
       ) : null}
     </div>

@@ -6,17 +6,25 @@ export function PaginationControls({
   page,
   pageSize,
   total,
+  hasNext,
   onPageChange,
   disabled = false,
 }: {
   page: number;
   pageSize: number;
   total: number;
+  hasNext?: boolean;
   onPageChange: (page: number) => void;
   disabled?: boolean;
 }) {
-  const pageCount = Math.max(1, Math.ceil(total / pageSize));
-  const safePage = Math.min(Math.max(1, page), pageCount);
+  const pageCount =
+    hasNext === undefined
+      ? Math.max(1, Math.ceil(total / pageSize))
+      : Math.max(1, page + Number(hasNext));
+  const safePage =
+    hasNext === undefined
+      ? Math.min(Math.max(1, page), pageCount)
+      : Math.max(1, page);
   const firstItem = total === 0 ? 0 : (safePage - 1) * pageSize + 1;
   const lastItem = Math.min(safePage * pageSize, total);
 
@@ -26,7 +34,8 @@ export function PaginationControls({
       className="flex flex-wrap items-center justify-between gap-3"
     >
       <p className="text-sm text-muted-foreground">
-        Showing {firstItem}–{lastItem} of {total}
+        Showing {firstItem}–{lastItem}
+        {hasNext === undefined ? ` of ${total}` : ""}
       </p>
       <div className="flex items-center gap-2">
         <Button
@@ -41,7 +50,9 @@ export function PaginationControls({
           Page {safePage} of {pageCount}
         </span>
         <Button
-          disabled={disabled || safePage >= pageCount}
+          disabled={
+            disabled || (hasNext === undefined ? safePage >= pageCount : !hasNext)
+          }
           onClick={() => onPageChange(safePage + 1)}
           size="sm"
           variant="outline"

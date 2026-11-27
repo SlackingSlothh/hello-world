@@ -12,9 +12,12 @@ import { ErrorState, LoadingState } from "@/components/shared/async-states";
 import { PageHeader } from "@/components/shared/page-header";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import {
   changeGroupMembership,
   createGroup,
+  createUser,
   listGroupMembers,
   listGroups,
   listUsers,
@@ -34,6 +37,7 @@ export function GroupManagement() {
   const [loadError, setLoadError] = useState("");
   const [loadAttempt, setLoadAttempt] = useState(0);
   const [editor, setEditor] = useState<Editor | null>(null);
+  const [showUserForm, setShowUserForm] = useState(false);
   const [actionError, setActionError] = useState("");
   const [busy, setBusy] = useState(false);
   const inFlight = useRef(false);
@@ -63,7 +67,7 @@ export function GroupManagement() {
     try {
       await action();
     } catch (error) {
-      setActionError(error instanceof Error ? error.message : "Could not update the group.");
+      setActionError(error instanceof Error ? error.message : "Could not complete the admin action.");
     } finally {
       inFlight.current = false;
       setBusy(false);
@@ -110,15 +114,28 @@ export function GroupManagement() {
       <PageHeader
         title="Groups"
         actions={
-          <Button
-            disabled={busy || !groups}
-            onClick={() => {
-              setActionError("");
-              setEditor(editor ? null : { mode: "create", name: "", memberIds: [], leaderId: "" });
-            }}
-          >
-            {editor ? "Close form" : "Create group"}
-          </Button>
+          <>
+            <Button
+              aria-expanded={showUserForm}
+              disabled={busy || !groups}
+              onClick={() => {
+                setActionError("");
+                setShowUserForm(!showUserForm);
+              }}
+              variant="outline"
+            >
+              {showUserForm ? "Close user form" : "Add user"}
+            </Button>
+            <Button
+              disabled={busy || !groups}
+              onClick={() => {
+                setActionError("");
+                setEditor(editor ? null : { mode: "create", name: "", memberIds: [], leaderId: "" });
+              }}
+            >
+              {editor ? "Close form" : "Create group"}
+            </Button>
+          </>
         }
       />
       {loadError && (
@@ -132,6 +149,68 @@ export function GroupManagement() {
       )}
       {actionError && <ErrorState message={actionError} />}
       {!groups && !loadError && <LoadingState label="Loading groups" />}
+      {showUserForm && (
+        <Card>
+          <CardHeader><CardTitle>New user</CardTitle></CardHeader>
+          <CardContent>
+            <form
+              method="post"
+              onSubmit={(event) => {
+                event.preventDefault();
+                const values = new FormData(event.currentTarget);
+                void run(async () => {
+                  const created = await createUser(
+                    String(values.get("username") ?? ""),
+                    String(values.get("password") ?? ""),
+                  );
+                  setUsers((current) =>
+                    [...current, created].sort((a, b) => a.username.localeCompare(b.username)),
+                  );
+                  setEditor((current) =>
+                    current?.mode === "manage"
+                      ? {
+                          ...current,
+                          members: [...current.members, { ...created, member: false }].sort(
+                            (a, b) => a.username.localeCompare(b.username),
+                          ),
+                        }
+                      : current,
+                  );
+                  setShowUserForm(false);
+                  toast.success("User created.");
+                });
+              }}
+            >
+              <fieldset className="space-y-4" disabled={busy}>
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <div className="space-y-2">
+                    <Label htmlFor="new-user-username">Username</Label>
+                    <Input
+                      autoComplete="username"
+                      id="new-user-username"
+                      maxLength={100}
+                      name="username"
+                      required
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="new-user-password">Password</Label>
+                    <Input
+                      autoComplete="new-password"
+                      id="new-user-password"
+                      maxLength={1024}
+                      name="password"
+                      required
+                      type="password"
+                    />
+                  </div>
+                </div>
+                <Button type="submit">Create user</Button>
+              </fieldset>
+            </form>
+          </CardContent>
+        </Card>
+      )}
       {editor?.mode === "create" && (
         <Card>
           <CardHeader><CardTitle>New group</CardTitle></CardHeader>
