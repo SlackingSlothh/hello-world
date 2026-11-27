@@ -153,6 +153,22 @@ services:
       - loki
       - tempo
 
+  k6:
+    image: grafana/k6:0.56.0
+    profiles: ["stress"]
+    user: "0:0"
+    environment:
+      BASE_URL: ${K6_BASE_URL:-http://app:8080}
+      PUBLIC_ORIGIN: ${PUBLIC_ORIGIN:-http://localhost}
+      FIXTURES_PATH: /scripts/fixtures/stress-fixtures.json
+      SUMMARY_DIR: /scripts/results
+    volumes:
+      - ./k6:/scripts
+    command: ["run", "/scripts/stress-test.js"]
+    depends_on:
+      - app
+      - worker
+
 volumes:
   platform_data:
   example_data:
