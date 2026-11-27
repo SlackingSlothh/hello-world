@@ -174,6 +174,6 @@ func redactValue(v any) any {
 	case fmt.Stringer:
 		return RedactString(typed.String())
 	default:
-		return v
+		return RedactString(fmt.Sprint(v))
 	}
 }
