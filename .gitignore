@@ -5,3 +5,4 @@
 .env.*
 !.env.example
 .next/
+k6/fixtures/stress-fixtures.json
