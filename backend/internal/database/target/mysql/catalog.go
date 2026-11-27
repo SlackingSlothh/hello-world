@@ -63,9 +63,10 @@ func (r Reader) logQueryResult(ctx context.Context, span trace.Span, started tim
 		attrs = append(attrs, slog.Int("rows_affected", rowCount))
 	}
 	if err != nil {
-		span.RecordError(err)
-		span.SetStatus(codes.Error, err.Error())
-		attrs = append(attrs, slog.String("status", "failed"), slog.String("error", err.Error()))
+		logError := observability.RedactString(err.Error())
+		span.RecordError(errors.New(logError))
+		span.SetStatus(codes.Error, logError)
+		attrs = append(attrs, slog.String("status", "failed"), slog.String("error", logError))
 		if r.Logger != nil {
 			r.Logger.LogAttrs(ctx, slog.LevelError, "db.query.result", attrs...)
 		}
@@ -263,7 +264,7 @@ func (r Reader) Select(ctx context.Context, req dbops.QueryRequest) (dbops.Query
 			if rbErr != nil && !errors.Is(rbErr, sql.ErrTxDone) {
 				status = "rollback_error"
 				level = slog.LevelError
-				attrs = append(attrs, slog.String("error", rbErr.Error()))
+				attrs = append(attrs, slog.String("error", observability.RedactString(rbErr.Error())))
 			}
 			attrs = append(attrs, slog.String("status", status))
 			r.Logger.LogAttrs(ctx, level, "db.tx.rollback", attrs...)
