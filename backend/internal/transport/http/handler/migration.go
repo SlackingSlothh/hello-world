@@ -46,18 +46,22 @@ func (h *Handler) createMigration(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
-		Title       string `json:"title"`
-		Description string `json:"description"`
-		SQLContent  string `json:"sql_content"`
+		Title              string `json:"title"`
+		Description        string `json:"description"`
+		SQLContent         string `json:"sql_content"`
+		SQLDown            string `json:"sql_down"`
+		IrreversibleReason string `json:"irreversible_reason"`
 	}
 	if !decode(w, r, &body) {
 		return
 	}
 	created, err := h.migrations.CreateDraft(r.Context(), principal, migration.CreateDraftInput{
-		DatabaseID:  r.PathValue("id"),
-		Title:       body.Title,
-		Description: body.Description,
-		SQLContent:  body.SQLContent,
+		DatabaseID:         r.PathValue("id"),
+		Title:              body.Title,
+		Description:        body.Description,
+		SQLContent:         body.SQLContent,
+		SQLDown:            body.SQLDown,
+		IrreversibleReason: body.IrreversibleReason,
 	})
 	if err != nil {
 		writeMigrationError(w, err)
@@ -76,19 +80,23 @@ func (h *Handler) updateMigration(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
-		Title       string `json:"title"`
-		Description string `json:"description"`
-		SQLContent  string `json:"sql_content"`
+		Title              string `json:"title"`
+		Description        string `json:"description"`
+		SQLContent         string `json:"sql_content"`
+		SQLDown            string `json:"sql_down"`
+		IrreversibleReason string `json:"irreversible_reason"`
 	}
 	if !decode(w, r, &body) {
 		return
 	}
 	updated, err := h.migrations.UpdateDraft(r.Context(), principal, migration.UpdateDraftInput{
-		DatabaseID:  r.PathValue("id"),
-		MigrationID: migrationID,
-		Title:       body.Title,
-		Description: body.Description,
-		SQLContent:  body.SQLContent,
+		DatabaseID:         r.PathValue("id"),
+		MigrationID:        migrationID,
+		Title:              body.Title,
+		Description:        body.Description,
+		SQLContent:         body.SQLContent,
+		SQLDown:            body.SQLDown,
+		IrreversibleReason: body.IrreversibleReason,
 	})
 	if err != nil {
 		writeMigrationError(w, err)
@@ -189,6 +197,12 @@ func writeMigrationError(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusConflict, "migration_locked", "another migration is executing for this connection")
 	case errors.Is(err, migration.ErrAlreadyApplied):
 		writeError(w, http.StatusConflict, "migration_already_applied", "an applied migration cannot be changed or executed again")
+	case errors.Is(err, migration.ErrDefinitionFrozen):
+		writeError(w, http.StatusConflict, "migration_definition_frozen", "create a new migration to change a definition that has already been attempted")
+	case errors.Is(err, migration.ErrRevisionChanged):
+		writeError(w, http.StatusConflict, "migration_revision_changed", "reload the migration before trying again")
+	case errors.Is(err, migration.ErrInvalidDefinition):
+		writeError(w, http.StatusUnprocessableEntity, "invalid_migration_definition", "provide either SQL down or an irreversible reason")
 	case errors.Is(err, migration.ErrInvalidSQL):
 		writeError(w, http.StatusUnprocessableEntity, "invalid_migration_sql", "migration SQL is invalid or not transaction-safe")
 	case errors.Is(err, migration.ErrExecutionFailed):

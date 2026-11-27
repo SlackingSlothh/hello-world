@@ -104,19 +104,21 @@ func (s *routeMigrationStore) ListMigrationsByDatabase(_ context.Context, databa
 	return result, nil
 }
 
-func (s *routeMigrationStore) UpdateDraftSQL(_ context.Context, id int64, title, description, sqlContent, updatedBy string, updatedAt time.Time) error {
-	item, ok := s.migrations[id]
-	if !ok {
+func (s *routeMigrationStore) UpdateDraftSQL(_ context.Context, item *migration.Migration) error {
+	if _, ok := s.migrations[item.ID]; !ok {
 		return migration.ErrNotFound
 	}
-	item.Title, item.Description, item.SQLContent = title, description, sqlContent
-	item.UpdatedBy, item.UpdatedAt = updatedBy, updatedAt
+	item.Revision++
+	copy := *item
+	s.migrations[item.ID] = &copy
 	return nil
 }
 
 func (s *routeMigrationStore) CreateRun(_ context.Context, run *migration.MigrationRun) error {
 	run.ID = s.nextRunID
 	s.nextRunID++
+	run.AttemptNumber = len(s.runs[run.MigrationID]) + 1
+	s.migrations[run.MigrationID].FrozenAt = &run.StartedAt
 	s.runs[run.MigrationID] = append(s.runs[run.MigrationID], *run)
 	return nil
 }
@@ -188,7 +190,18 @@ func TestMigrationRoutes_EndToEndFlow(t *testing.T) {
 		migrationService,
 	)
 
-	body := `{"title":"Tambah tabel kategori","description":"Migrasi awal","sql_content":"CREATE TABLE categories (id SERIAL PRIMARY KEY, name TEXT NOT NULL);"}`
+	for _, invalid := range []string{
+		`{"title":"Missing rollback definition","sql_content":"CREATE TABLE categories (id INT);"}`,
+		`{"title":"Two rollback definitions","sql_content":"CREATE TABLE categories (id INT);","sql_down":"DROP TABLE categories;","irreversible_reason":"Cannot restore data"}`,
+		`{"title":"Unsafe down","sql_content":"CREATE TABLE categories (id INT);","sql_down":"COMMIT;"}`,
+	} {
+		response := httptest.NewRecorder()
+		api.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/api/v1/connections/connection-1/migrations", strings.NewReader(invalid)))
+		if response.Code != http.StatusUnprocessableEntity {
+			t.Fatalf("invalid rollback definition: got %d: %s", response.Code, response.Body.String())
+		}
+	}
+	body := `{"title":"Tambah tabel kategori","description":"Migrasi awal","sql_content":"CREATE TABLE categories (id SERIAL PRIMARY KEY, name TEXT NOT NULL);","sql_down":"DROP TABLE categories;"}`
 	createdResponse := httptest.NewRecorder()
 	api.ServeHTTP(createdResponse, httptest.NewRequest(http.MethodPost, "/api/v1/connections/connection-1/migrations", strings.NewReader(body)))
 	if createdResponse.Code != http.StatusCreated {
@@ -201,12 +214,20 @@ func TestMigrationRoutes_EndToEndFlow(t *testing.T) {
 	if created.CreatedBy != access.UserID || created.UpdatedBy != access.UserID {
 		t.Fatalf("audit identity should come from the authenticated session: %+v", created)
 	}
+	if created.Revision != 1 || created.SQLDown != "DROP TABLE categories;" {
+		t.Fatalf("create did not return the saved definition: %+v", created)
+	}
 
 	updatedResponse := httptest.NewRecorder()
-	updatedBody := `{"title":"Kategori","description":"Diperbarui","sql_content":"CREATE TABLE categories (id SERIAL PRIMARY KEY, name TEXT NOT NULL);"}`
+	updatedBody := `{"title":"Kategori","description":"Diperbarui","sql_content":"CREATE TABLE categories (id SERIAL PRIMARY KEY, name TEXT NOT NULL);","irreversible_reason":"Existing data must be preserved"}`
 	api.ServeHTTP(updatedResponse, httptest.NewRequest(http.MethodPatch, "/api/v1/connections/connection-1/migrations/1", strings.NewReader(updatedBody)))
 	if updatedResponse.Code != http.StatusOK {
 		t.Fatalf("update migration: got %d: %s", updatedResponse.Code, updatedResponse.Body.String())
+	}
+	var updated migration.Migration
+	if err := json.Unmarshal(updatedResponse.Body.Bytes(), &updated); err != nil ||
+		updated.Revision != 2 || updated.IrreversibleReason != "Existing data must be preserved" || updated.SQLDown != "" {
+		t.Fatalf("update did not replace the definition: %s", updatedResponse.Body.String())
 	}
 
 	detailResponse := httptest.NewRecorder()

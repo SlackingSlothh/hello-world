@@ -105,22 +105,19 @@ func (s *inMemoryStore) ListMigrationsByDatabase(_ context.Context, databaseID s
 	return out, nil
 }
 
-func (s *inMemoryStore) UpdateDraftSQL(_ context.Context, migrationID int64, title, description, sqlContent, updatedBy string, updatedAt time.Time) error {
+func (s *inMemoryStore) UpdateDraftSQL(_ context.Context, updated *Migration) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	m, ok := s.migrations[migrationID]
+	m, ok := s.migrations[updated.ID]
 	if !ok {
 		return ErrNotFound
 	}
-	if m.Status == StatusApplied {
-		return ErrAlreadyApplied
+	if m.FrozenAt != nil || m.Revision != updated.Revision {
+		return ErrRevisionChanged
 	}
-	m.Title = title
-	m.Description = description
-	m.SQLContent = sqlContent
-	m.UpdatedBy = updatedBy
-	m.UpdatedAt = updatedAt
+	updated.Revision++
+	*m = *updated
 	return nil
 }
 
@@ -128,6 +125,14 @@ func (s *inMemoryStore) CreateRun(_ context.Context, run *MigrationRun) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	m := s.migrations[run.MigrationID]
+	if m.Revision != run.Revision || m.SQLContent != run.SQLSnapshot {
+		return ErrRevisionChanged
+	}
+	if m.FrozenAt == nil {
+		m.FrozenAt = &run.StartedAt
+	}
+	run.AttemptNumber = len(s.runsByMigID[run.MigrationID]) + 1
 	run.ID = s.nextRunID
 	s.nextRunID++
 	cp := *run
@@ -351,7 +356,7 @@ func TestValidateTransactionalSQLForDialect(t *testing.T) {
 	}
 }
 
-func TestMigrationLifecycle_FailRollbackThenFixAndCommit(t *testing.T) {
+func TestMigrationLifecycle_FailedAttemptFreezesDefinitionAndRetryKeepsHistory(t *testing.T) {
 	ctx := context.Background()
 	authz := newMockAuthorizer()
 	store := newInMemoryStore()
@@ -367,7 +372,8 @@ func TestMigrationLifecycle_FailRollbackThenFixAndCommit(t *testing.T) {
 		DatabaseID:  dbID,
 		Title:       "Buat tabel produk",
 		Description: "Menambahkan tabel products awal",
-		SQLContent:  "CREATE TABEL products (id SERIAL PRIMARY KEY);",
+		SQLContent:  "CREATE TABLE products (id SERIAL PRIMARY KEY);",
+		SQLDown:     "DROP TABLE products;",
 	})
 	if err != nil {
 		t.Fatalf("CreateDraft gagal: %v", err)
@@ -377,7 +383,7 @@ func TestMigrationLifecycle_FailRollbackThenFixAndCommit(t *testing.T) {
 	}
 
 	targetDB.shouldFailSQL = true
-	targetDB.failErrMsg = `ERROR: syntax error at or near "TABEL" (SQLSTATE 42601)`
+	targetDB.failErrMsg = "temporary target failure"
 
 	execRes1, err := svc.ExecuteMigration(ctx, devUser, dbID, draft.ID)
 	if !errors.Is(err, ErrExecutionFailed) {
@@ -390,16 +396,15 @@ func TestMigrationLifecycle_FailRollbackThenFixAndCommit(t *testing.T) {
 		t.Fatalf("transaksi target DB seharusnya di-rollback")
 	}
 
-	fixedSQL := "CREATE TABLE products (id SERIAL PRIMARY KEY, name TEXT NOT NULL);"
 	_, err = svc.UpdateDraft(ctx, devUser, UpdateDraftInput{
 		DatabaseID:  dbID,
 		MigrationID: draft.ID,
 		Title:       "Buat tabel produk",
-		Description: "Sudah diperbaiki typo TABEL -> TABLE",
-		SQLContent:  fixedSQL,
+		SQLContent:  "CREATE TABLE products (id SERIAL PRIMARY KEY, name TEXT NOT NULL);",
+		SQLDown:     "DROP TABLE products;",
 	})
-	if err != nil {
-		t.Fatalf("UpdateDraft setelah gagal seharusnya diizinkan: %v", err)
+	if !errors.Is(err, ErrDefinitionFrozen) {
+		t.Fatalf("attempted definition should stay frozen: %v", err)
 	}
 
 	targetDB.shouldFailSQL = false
@@ -414,6 +419,12 @@ func TestMigrationLifecycle_FailRollbackThenFixAndCommit(t *testing.T) {
 	detail, err := svc.GetMigrationDetail(ctx, devUser, dbID, draft.ID)
 	if err != nil || len(detail.Runs) != 2 {
 		t.Fatalf("seharusnya terdapat 2 catatan di migration_runs")
+	}
+	first, second := detail.Runs[0], detail.Runs[1]
+	if first.Status != RunStatusFailed || second.Status != RunStatusSucceeded || first.ID == second.ID ||
+		first.Revision != draft.Revision || second.Revision != draft.Revision ||
+		first.SQLSnapshot != draft.SQLContent || second.SQLSnapshot != draft.SQLContent {
+		t.Fatalf("retry did not preserve the original attempt: %+v", detail.Runs)
 	}
 
 	_, err = svc.UpdateDraft(ctx, devUser, UpdateDraftInput{
@@ -449,6 +460,7 @@ func TestAccessControl_ViewOnlyCannotMutateOrExecute(t *testing.T) {
 		DatabaseID: dbA,
 		Title:      "Tambah kolom stok",
 		SQLContent: "ALTER TABLE products ADD COLUMN stock INT NOT NULL DEFAULT 0;",
+		SQLDown:    "ALTER TABLE products DROP COLUMN stock;",
 	})
 	if err != nil {
 		t.Fatalf("editor gagal membuat draf: %v", err)
@@ -554,9 +566,10 @@ func TestExecuteMigration_RejectsImplicitCommitSQLForMySQL(t *testing.T) {
 	service := NewService(authz, store, targetDB, nil)
 
 	draft, err := service.CreateDraft(ctx, user, CreateDraftInput{
-		DatabaseID: "mysql-db",
-		Title:      "Create table",
-		SQLContent: "CREATE TABLE products (id INT);",
+		DatabaseID:         "mysql-db",
+		Title:              "Create table",
+		SQLContent:         "CREATE TABLE products (id INT);",
+		IrreversibleReason: "Test migration without SQL down",
 	})
 	if err != nil {
 		t.Fatalf("create draft: %v", err)

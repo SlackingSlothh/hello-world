@@ -658,15 +658,9 @@ paths:
         content:
           application/json:
             schema:
-              type: object
-              required: [title, sql_content]
-              properties:
-                title:
-                  type: string
-                description:
-                  type: string
-                sql_content:
-                  type: string
+              allOf:
+                - $ref: "#/components/schemas/MigrationDefinitionInput"
+                - required: [title]
       responses:
         "201":
           description: Draft created.
@@ -681,7 +675,7 @@ paths:
         "403":
           $ref: "#/components/responses/Forbidden"
         "422":
-          description: SQL is invalid or not transaction-safe.
+          description: The rollback definition is incomplete or SQL is invalid.
           content:
             application/json:
               schema:
@@ -718,22 +712,14 @@ paths:
       tags: [Migrations]
       operationId: updateMigration
       summary: Update a draft migration
-      description: Applied migrations cannot be edited.
+      description: Only drafts that have never been attempted can be edited.
       x-required-permission: UpdateMigration
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              type: object
-              required: [sql_content]
-              properties:
-                title:
-                  type: string
-                description:
-                  type: string
-                sql_content:
-                  type: string
+              $ref: "#/components/schemas/MigrationDefinitionInput"
       responses:
         "200":
           description: Updated migration.
@@ -750,13 +736,13 @@ paths:
         "404":
           $ref: "#/components/responses/NotFound"
         "409":
-          description: Migration has already been applied.
+          description: The revision changed or its definition has been frozen by an execution attempt.
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
         "422":
-          description: SQL is invalid or not transaction-safe.
+          description: The rollback definition is incomplete or SQL is invalid.
           content:
             application/json:
               schema:
@@ -789,7 +775,7 @@ paths:
         "404":
           $ref: "#/components/responses/NotFound"
         "409":
-          description: Another migration is running or this migration was already applied.
+          description: Another migration is running, this migration was already applied, or its draft revision changed before execution started.
           content:
             application/json:
               schema:
@@ -1520,9 +1506,35 @@ components:
           items:
             type: array
             items: {}
+    MigrationDefinitionInput:
+      type: object
+      required: [sql_content]
+      properties:
+        title:
+          type: string
+        description:
+          type: string
+        sql_content:
+          type: string
+          description: SQL up.
+        sql_down:
+          type: string
+          description: SQL that reverses SQL up.
+        irreversible_reason:
+          type: string
+          description: Why the migration cannot be rolled back.
+      oneOf:
+        - required: [sql_down]
+          properties:
+            sql_down:
+              pattern: '\S'
+        - required: [irreversible_reason]
+          properties:
+            irreversible_reason:
+              pattern: '\S'
     Migration:
       type: object
-      required: [id, database_id, title, description, sql_content, status, created_by, updated_by, created_at, updated_at]
+      required: [id, database_id, title, description, sql_content, revision, status, created_by, updated_by, created_at, updated_at]
       properties:
         id:
           type: integer
@@ -1538,6 +1550,19 @@ components:
           type: string
         sql_content:
           type: string
+          description: SQL up.
+        sql_down:
+          type: string
+        irreversible_reason:
+          type: string
+        revision:
+          type: integer
+          format: int64
+          minimum: 1
+        frozen_at:
+          type: string
+          format: date-time
+          description: When the first execution attempt froze this revision.
         status:
           type: string
           enum: [DRAFT, FAILED, APPLIED]
@@ -1556,7 +1581,7 @@ components:
           format: date-time
     MigrationRun:
       type: object
-      required: [id, migration_id, database_id, attempt_number, sql_snapshot, status, executed_by, execution_ms, started_at]
+      required: [id, migration_id, database_id, attempt_number, revision, sql_snapshot, status, executed_by, execution_ms, started_at]
       properties:
         id:
           type: integer
@@ -1568,6 +1593,10 @@ components:
           type: string
         attempt_number:
           type: integer
+        revision:
+          type: integer
+          format: int64
+          minimum: 1
         sql_snapshot:
           type: string
         status:

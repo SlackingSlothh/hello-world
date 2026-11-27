@@ -23,7 +23,10 @@ var (
 	// id migrasi bukan milik database yang diminta
 	ErrDatabaseMismatch = errors.New("migration: ID migrasi tidak terdaftar pada database target tersebut")
 	// migrasi yang sudah diterapkan tidak bisa diubah atau dijalankan ulang
-	ErrAlreadyApplied = errors.New("migration: migrasi sudah diterapkan dan tidak dapat diubah atau dijalankan ulang")
+	ErrAlreadyApplied    = errors.New("migration: migrasi sudah diterapkan dan tidak dapat diubah atau dijalankan ulang")
+	ErrDefinitionFrozen  = errors.New("migration: definisi sudah dikunci oleh percobaan eksekusi")
+	ErrRevisionChanged   = errors.New("migration: revisi telah berubah")
+	ErrInvalidDefinition = errors.New("migration: provide either SQL down or an irreversible reason")
 	// sedang ada migrasi lain yang berjalan di database target yang sama
 	ErrMigrationLocked = errors.New("migration: sedang ada eksekusi migrasi lain yang berjalan pada database target ini")
 	// kueri sql kosong atau mengandung perintah transaksi manual
@@ -76,18 +79,22 @@ type Principal struct {
 
 // representasi satu baris pada tabel migrations di database platform
 type Migration struct {
-	ID          int64      `json:"id"`
-	DatabaseID  string     `json:"database_id"`
-	Version     *int64     `json:"version,omitempty"` // bernilai nil saat draft atau failed, berisi nomor urut saat applied
-	Title       string     `json:"title"`
-	Description string     `json:"description"`
-	SQLContent  string     `json:"sql_content"`
-	Status      Status     `json:"status"`
-	CreatedBy   string     `json:"created_by"`
-	UpdatedBy   string     `json:"updated_by"`
-	CreatedAt   time.Time  `json:"created_at"`
-	UpdatedAt   time.Time  `json:"updated_at"`
-	AppliedAt   *time.Time `json:"applied_at,omitempty"`
+	ID                 int64      `json:"id"`
+	DatabaseID         string     `json:"database_id"`
+	Version            *int64     `json:"version,omitempty"` // bernilai nil saat draft atau failed, berisi nomor urut saat applied
+	Title              string     `json:"title"`
+	Description        string     `json:"description"`
+	SQLContent         string     `json:"sql_content"`
+	SQLDown            string     `json:"sql_down,omitempty"`
+	IrreversibleReason string     `json:"irreversible_reason,omitempty"`
+	Revision           int64      `json:"revision"`
+	FrozenAt           *time.Time `json:"frozen_at,omitempty"`
+	Status             Status     `json:"status"`
+	CreatedBy          string     `json:"created_by"`
+	UpdatedBy          string     `json:"updated_by"`
+	CreatedAt          time.Time  `json:"created_at"`
+	UpdatedAt          time.Time  `json:"updated_at"`
+	AppliedAt          *time.Time `json:"applied_at,omitempty"`
 }
 
 // representasi satu baris riwayat percobaan pada tabel migration_runs
@@ -96,6 +103,7 @@ type MigrationRun struct {
 	MigrationID   int64      `json:"migration_id"`
 	DatabaseID    string     `json:"database_id"`
 	AttemptNumber int        `json:"attempt_number"`
+	Revision      int64      `json:"revision"`
 	SQLSnapshot   string     `json:"sql_snapshot"` // salinan sql saat percobaan dijalankan
 	Status        RunStatus  `json:"status"`
 	ExecutedBy    string     `json:"executed_by"`
@@ -149,7 +157,7 @@ type Store interface {
 	CreateMigration(ctx context.Context, m *Migration) error
 	GetMigrationByID(ctx context.Context, migrationID int64) (*Migration, error)
 	ListMigrationsByDatabase(ctx context.Context, databaseID string) ([]Migration, error)
-	UpdateDraftSQL(ctx context.Context, migrationID int64, title, description, sqlContent, updatedBy string, updatedAt time.Time) error
+	UpdateDraftSQL(ctx context.Context, m *Migration) error
 
 	CreateRun(ctx context.Context, run *MigrationRun) error
 	CompleteRunFailed(ctx context.Context, runID, migrationID int64, errMsg string, execMs int64, finishedAt time.Time) error
@@ -502,10 +510,27 @@ func (s *Service) SetClock(nowFn func() time.Time) {
 }
 
 type CreateDraftInput struct {
-	DatabaseID  string
-	Title       string
-	Description string
-	SQLContent  string
+	DatabaseID         string
+	Title              string
+	Description        string
+	SQLContent         string
+	SQLDown            string
+	IrreversibleReason string
+}
+
+func validateDefinition(sqlUp, sqlDown, irreversibleReason string) error {
+	if (strings.TrimSpace(sqlDown) == "") == (strings.TrimSpace(irreversibleReason) == "") {
+		return ErrInvalidDefinition
+	}
+	if err := ValidateTransactionalSQL(sqlUp); err != nil {
+		return err
+	}
+	if strings.TrimSpace(sqlDown) != "" {
+		if err := ValidateTransactionalSQL(sqlDown); err != nil {
+			return fmt.Errorf("SQL down: %w", err)
+		}
+	}
+	return nil
 }
 
 // membuat dan menyimpan rancangan migrasi baru dengan status draft
@@ -518,21 +543,24 @@ func (s *Service) CreateDraft(ctx context.Context, principal Principal, in Creat
 	if title == "" {
 		return nil, fmt.Errorf("%w: judul migrasi wajib diisi", ErrInvalidSQL)
 	}
-	if err := ValidateTransactionalSQL(in.SQLContent); err != nil {
+	if err := validateDefinition(in.SQLContent, in.SQLDown, in.IrreversibleReason); err != nil {
 		return nil, err
 	}
 
 	now := s.nowFn()
 	m := &Migration{
-		DatabaseID:  in.DatabaseID,
-		Title:       title,
-		Description: strings.TrimSpace(in.Description),
-		SQLContent:  strings.TrimSpace(in.SQLContent),
-		Status:      StatusDraft,
-		CreatedBy:   principal.UserID,
-		UpdatedBy:   principal.UserID,
-		CreatedAt:   now,
-		UpdatedAt:   now,
+		DatabaseID:         in.DatabaseID,
+		Title:              title,
+		Description:        strings.TrimSpace(in.Description),
+		SQLContent:         strings.TrimSpace(in.SQLContent),
+		SQLDown:            strings.TrimSpace(in.SQLDown),
+		IrreversibleReason: strings.TrimSpace(in.IrreversibleReason),
+		Revision:           1,
+		Status:             StatusDraft,
+		CreatedBy:          principal.UserID,
+		UpdatedBy:          principal.UserID,
+		CreatedAt:          now,
+		UpdatedAt:          now,
 	}
 
 	if err := s.store.CreateMigration(ctx, m); err != nil {
@@ -553,14 +581,16 @@ func (s *Service) CreateDraft(ctx context.Context, principal Principal, in Creat
 }
 
 type UpdateDraftInput struct {
-	DatabaseID  string
-	MigrationID int64
-	Title       string
-	Description string
-	SQLContent  string
+	DatabaseID         string
+	MigrationID        int64
+	Title              string
+	Description        string
+	SQLContent         string
+	SQLDown            string
+	IrreversibleReason string
 }
 
-// memperbarui rancangan sql selama statusnya belum applied
+// UpdateDraft changes a draft before its first execution attempt.
 func (s *Service) UpdateDraft(ctx context.Context, principal Principal, in UpdateDraftInput) (*Migration, error) {
 	if err := s.authorize(ctx, principal, in.DatabaseID, ActionUpdateMigration); err != nil {
 		return nil, err
@@ -573,28 +603,29 @@ func (s *Service) UpdateDraft(ctx context.Context, principal Principal, in Updat
 	if existing.Status == StatusApplied {
 		return nil, ErrAlreadyApplied
 	}
+	if existing.FrozenAt != nil {
+		return nil, ErrDefinitionFrozen
+	}
 
 	title := strings.TrimSpace(in.Title)
 	if title == "" {
 		title = existing.Title
 	}
-	if err := ValidateTransactionalSQL(in.SQLContent); err != nil {
+	if err := validateDefinition(in.SQLContent, in.SQLDown, in.IrreversibleReason); err != nil {
 		return nil, err
 	}
 
 	now := s.nowFn()
-	cleanedSQL := strings.TrimSpace(in.SQLContent)
-	cleanedDesc := strings.TrimSpace(in.Description)
-
-	if err := s.store.UpdateDraftSQL(ctx, existing.ID, title, cleanedDesc, cleanedSQL, principal.UserID, now); err != nil {
-		return nil, err
-	}
-
 	existing.Title = title
-	existing.Description = cleanedDesc
-	existing.SQLContent = cleanedSQL
+	existing.Description = strings.TrimSpace(in.Description)
+	existing.SQLContent = strings.TrimSpace(in.SQLContent)
+	existing.SQLDown = strings.TrimSpace(in.SQLDown)
+	existing.IrreversibleReason = strings.TrimSpace(in.IrreversibleReason)
 	existing.UpdatedBy = principal.UserID
 	existing.UpdatedAt = now
+	if err := s.store.UpdateDraftSQL(ctx, existing); err != nil {
+		return nil, err
+	}
 
 	s.logAudit(ctx, AuditEvent{
 		ActorUserID: principal.UserID,
@@ -667,39 +698,43 @@ func (s *Service) ExecuteMigration(ctx context.Context, principal Principal, dat
 	}
 	defer s.unlockDatabase(databaseID)
 
-	tx, err := s.connector.BeginTargetTx(ctx, databaseID)
-	if err != nil {
-		return nil, fmt.Errorf("gagal membuka transaksi ke database target: %w", err)
-	}
+	startTime := s.nowFn()
+	tx, beginErr := s.connector.BeginTargetTx(ctx, databaseID)
 	committed := false
-	defer func() {
-		if !committed {
-			_ = tx.Rollback(ctx)
+	if beginErr == nil {
+		defer func() {
+			if !committed {
+				_ = tx.Rollback(ctx)
+			}
+		}()
+		if err := ValidateTransactionalSQLForDialect(m.SQLContent, tx.Dialect()); err != nil {
+			return nil, err
 		}
-	}()
-	if err := ValidateTransactionalSQLForDialect(m.SQLContent, tx.Dialect()); err != nil {
-		return nil, errors.Join(err, tx.Rollback(ctx))
+		if m.SQLDown != "" {
+			if err := ValidateTransactionalSQLForDialect(m.SQLDown, tx.Dialect()); err != nil {
+				return nil, fmt.Errorf("SQL down: %w", err)
+			}
+		}
 	}
-
-	prevRuns, err := s.store.ListRunsByMigration(ctx, m.ID)
-	if err != nil {
-		return nil, err
-	}
-	attemptNum := len(prevRuns) + 1
 
 	// catat awal percobaan eksekusi di database platform
-	startTime := s.nowFn()
 	run := &MigrationRun{
-		MigrationID:   m.ID,
-		DatabaseID:    databaseID,
-		AttemptNumber: attemptNum,
-		SQLSnapshot:   m.SQLContent,
-		Status:        RunStatusRunning,
-		ExecutedBy:    principal.UserID,
-		StartedAt:     startTime,
+		MigrationID: m.ID,
+		DatabaseID:  databaseID,
+		Revision:    m.Revision,
+		SQLSnapshot: m.SQLContent,
+		Status:      RunStatusRunning,
+		ExecutedBy:  principal.UserID,
+		StartedAt:   startTime,
 	}
 	if err := s.store.CreateRun(ctx, run); err != nil {
 		return nil, err
+	}
+	if m.FrozenAt == nil {
+		m.FrozenAt = &startTime
+	}
+	if beginErr != nil {
+		return s.failRun(ctx, principal, m, run, startTime, fmt.Errorf("gagal membuka transaksi ke database target: %w", beginErr))
 	}
 
 	if err := tx.AcquireTargetLock(ctx, databaseID); err != nil {
@@ -709,7 +744,7 @@ func (s *Service) ExecuteMigration(ctx context.Context, principal Principal, dat
 	}
 
 	// jalankan kueri sql pada database target, langsung rollback jika gagal
-	if err := tx.ExecSQL(ctx, m.SQLContent); err != nil {
+	if err := tx.ExecSQL(ctx, run.SQLSnapshot); err != nil {
 		rollbackErr := tx.Rollback(ctx)
 		committed = true
 		return s.failRun(ctx, principal, m, run, startTime, errors.Join(err, rollbackErr))
@@ -729,7 +764,9 @@ func (s *Service) ExecuteMigration(ctx context.Context, principal Principal, dat
 	}
 
 	// tetapkan nomor versi linear dan tandai migrasi sebagai applied
-	assignedVersion, err := s.store.CompleteRunSucceeded(ctx, run.ID, m.ID, databaseID, execMs, finishTime)
+	finishCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+	assignedVersion, err := s.store.CompleteRunSucceeded(finishCtx, run.ID, m.ID, databaseID, execMs, finishTime)
 	if err != nil {
 		return nil, fmt.Errorf("perubahan telah di-commit ke database target namun gagal memperbarui riwayat platform: %w", err)
 	}
@@ -769,7 +806,9 @@ func (s *Service) failRun(ctx context.Context, principal Principal, m *Migration
 		execMs = 0
 	}
 
-	if err := s.store.CompleteRunFailed(ctx, run.ID, m.ID, errMsg, execMs, finishTime); err != nil {
+	finishCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+	if err := s.store.CompleteRunFailed(finishCtx, run.ID, m.ID, errMsg, execMs, finishTime); err != nil {
 		cause = errors.Join(cause, fmt.Errorf("gagal menyimpan status kegagalan: %w", err))
 		errMsg = cause.Error()
 	}
