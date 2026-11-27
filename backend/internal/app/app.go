@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
@@ -90,7 +91,8 @@ func Run() error {
 		}
 		return db, connection.Driver, nil
 	})
-	migrationService := migration.NewService(migration.AccessAuthorizer{Reader: authStore}, migrationStore, migrationConnector, nil)
+	migrationAudit := migration.SlogAuditLogger{Logger: slog.New(slog.NewJSONHandler(os.Stdout, nil))}
+	migrationService := migration.NewService(migration.AccessAuthorizer{Reader: authStore}, migrationStore, migrationConnector, migrationAudit)
 	databaseAPI := handler.New(connections, catalogService, accessapp.Service{Store: authStore, Users: authStore, Groups: authStore, Memberships: authStore}, handler.NewSecurity(application.Authentication, application.Authorization), migrationService)
 	if err := application.HandleRoute("/api/v1/", databaseAPI); err != nil {
 		_ = registry.Close()

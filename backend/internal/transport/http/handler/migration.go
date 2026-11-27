@@ -23,6 +23,21 @@ func (h *Handler) listMigrations(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"database_id": databaseID, "migrations": items})
 }
 
+func (h *Handler) listMigrationHistory(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	principal, ok := h.migrationPrincipal(w, r)
+	if !ok {
+		return
+	}
+	databaseID := r.PathValue("id")
+	history, err := h.migrations.ListMigrationHistory(r.Context(), principal, databaseID)
+	if err != nil {
+		writeMigrationError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"database_id": databaseID, "runs": history})
+}
+
 func (h *Handler) getMigration(w http.ResponseWriter, r *http.Request) {
 	principal, ok := h.migrationPrincipal(w, r)
 	if !ok {
@@ -46,18 +61,22 @@ func (h *Handler) createMigration(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
-		Title       string `json:"title"`
-		Description string `json:"description"`
-		SQLContent  string `json:"sql_content"`
+		Title              string `json:"title"`
+		Description        string `json:"description"`
+		SQLContent         string `json:"sql_content"`
+		SQLDown            string `json:"sql_down"`
+		IrreversibleReason string `json:"irreversible_reason"`
 	}
 	if !decode(w, r, &body) {
 		return
 	}
 	created, err := h.migrations.CreateDraft(r.Context(), principal, migration.CreateDraftInput{
-		DatabaseID:  r.PathValue("id"),
-		Title:       body.Title,
-		Description: body.Description,
-		SQLContent:  body.SQLContent,
+		DatabaseID:         r.PathValue("id"),
+		Title:              body.Title,
+		Description:        body.Description,
+		SQLContent:         body.SQLContent,
+		SQLDown:            body.SQLDown,
+		IrreversibleReason: body.IrreversibleReason,
 	})
 	if err != nil {
 		writeMigrationError(w, err)
@@ -76,19 +95,23 @@ func (h *Handler) updateMigration(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
-		Title       string `json:"title"`
-		Description string `json:"description"`
-		SQLContent  string `json:"sql_content"`
+		Title              string `json:"title"`
+		Description        string `json:"description"`
+		SQLContent         string `json:"sql_content"`
+		SQLDown            string `json:"sql_down"`
+		IrreversibleReason string `json:"irreversible_reason"`
 	}
 	if !decode(w, r, &body) {
 		return
 	}
 	updated, err := h.migrations.UpdateDraft(r.Context(), principal, migration.UpdateDraftInput{
-		DatabaseID:  r.PathValue("id"),
-		MigrationID: migrationID,
-		Title:       body.Title,
-		Description: body.Description,
-		SQLContent:  body.SQLContent,
+		DatabaseID:         r.PathValue("id"),
+		MigrationID:        migrationID,
+		Title:              body.Title,
+		Description:        body.Description,
+		SQLContent:         body.SQLContent,
+		SQLDown:            body.SQLDown,
+		IrreversibleReason: body.IrreversibleReason,
 	})
 	if err != nil {
 		writeMigrationError(w, err)
@@ -186,9 +209,19 @@ func writeMigrationError(w http.ResponseWriter, err error) {
 	case errors.Is(err, migration.ErrNotFound):
 		writeError(w, http.StatusNotFound, "not_found", "migration not found")
 	case errors.Is(err, migration.ErrMigrationLocked):
-		writeError(w, http.StatusConflict, "migration_locked", "another migration is executing for this connection")
+		writeError(w, http.StatusConflict, "migration_locked", "a migration is running or awaiting outcome verification for this connection")
+	case errors.Is(err, migration.ErrOutcomeUnconfirmed):
+		writeError(w, http.StatusConflict, "migration_outcome_unconfirmed", "verify the previous execution outcome before trying again")
+	case errors.Is(err, migration.ErrMigrationOrder):
+		writeError(w, http.StatusConflict, "migration_out_of_order", "complete the pending forward migrations before applying a new one")
 	case errors.Is(err, migration.ErrAlreadyApplied):
 		writeError(w, http.StatusConflict, "migration_already_applied", "an applied migration cannot be changed or executed again")
+	case errors.Is(err, migration.ErrDefinitionFrozen):
+		writeError(w, http.StatusConflict, "migration_definition_frozen", "create a new migration to change a definition that has already been attempted")
+	case errors.Is(err, migration.ErrRevisionChanged):
+		writeError(w, http.StatusConflict, "migration_revision_changed", "reload the migration before trying again")
+	case errors.Is(err, migration.ErrInvalidDefinition):
+		writeError(w, http.StatusUnprocessableEntity, "invalid_migration_definition", "provide either SQL down or an irreversible reason")
 	case errors.Is(err, migration.ErrInvalidSQL):
 		writeError(w, http.StatusUnprocessableEntity, "invalid_migration_sql", "migration SQL is invalid or not transaction-safe")
 	case errors.Is(err, migration.ErrExecutionFailed):

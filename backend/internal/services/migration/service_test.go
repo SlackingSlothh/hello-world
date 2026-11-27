@@ -1,8 +1,11 @@
 package migration
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
+	"log/slog"
 	"strings"
 	"sync"
 	"testing"
@@ -105,22 +108,19 @@ func (s *inMemoryStore) ListMigrationsByDatabase(_ context.Context, databaseID s
 	return out, nil
 }
 
-func (s *inMemoryStore) UpdateDraftSQL(_ context.Context, migrationID int64, title, description, sqlContent, updatedBy string, updatedAt time.Time) error {
+func (s *inMemoryStore) UpdateDraftSQL(_ context.Context, updated *Migration) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	m, ok := s.migrations[migrationID]
+	m, ok := s.migrations[updated.ID]
 	if !ok {
 		return ErrNotFound
 	}
-	if m.Status == StatusApplied {
-		return ErrAlreadyApplied
+	if m.FrozenAt != nil || m.Revision != updated.Revision {
+		return ErrRevisionChanged
 	}
-	m.Title = title
-	m.Description = description
-	m.SQLContent = sqlContent
-	m.UpdatedBy = updatedBy
-	m.UpdatedAt = updatedAt
+	updated.Revision++
+	*m = *updated
 	return nil
 }
 
@@ -128,6 +128,14 @@ func (s *inMemoryStore) CreateRun(_ context.Context, run *MigrationRun) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	m := s.migrations[run.MigrationID]
+	if m.Revision != run.Revision || m.SQLContent != run.SQLSnapshot {
+		return ErrRevisionChanged
+	}
+	if m.FrozenAt == nil {
+		m.FrozenAt = &run.StartedAt
+	}
+	run.AttemptNumber = len(s.runsByMigID[run.MigrationID]) + 1
 	run.ID = s.nextRunID
 	s.nextRunID++
 	cp := *run
@@ -198,10 +206,15 @@ func (s *inMemoryStore) ListRunsByMigration(_ context.Context, migrationID int64
 	return out, nil
 }
 
+func (s *inMemoryStore) ListMigrationHistory(context.Context, string) ([]HistoryEntry, error) {
+	return []HistoryEntry{}, nil
+}
+
 type mockTargetDB struct {
 	mu             sync.Mutex
 	shouldFailSQL  bool
 	failErrMsg     string
+	commitError    error
 	committedSQLs  []string
 	rolledBackRuns int
 	currentSchema  []TableSchema
@@ -263,7 +276,7 @@ func (tx *mockTargetTx) Commit(_ context.Context) error {
 	}
 	tx.done = true
 	tx.parent.committedSQLs = append(tx.parent.committedSQLs, tx.stagedSQLs...)
-	return nil
+	return tx.parent.commitError
 }
 
 func (tx *mockTargetTx) Rollback(_ context.Context) error {
@@ -351,7 +364,7 @@ func TestValidateTransactionalSQLForDialect(t *testing.T) {
 	}
 }
 
-func TestMigrationLifecycle_FailRollbackThenFixAndCommit(t *testing.T) {
+func TestMigrationLifecycle_FailedAttemptFreezesDefinitionAndRetryKeepsHistory(t *testing.T) {
 	ctx := context.Background()
 	authz := newMockAuthorizer()
 	store := newInMemoryStore()
@@ -367,7 +380,8 @@ func TestMigrationLifecycle_FailRollbackThenFixAndCommit(t *testing.T) {
 		DatabaseID:  dbID,
 		Title:       "Buat tabel produk",
 		Description: "Menambahkan tabel products awal",
-		SQLContent:  "CREATE TABEL products (id SERIAL PRIMARY KEY);",
+		SQLContent:  "CREATE TABLE products (id SERIAL PRIMARY KEY);",
+		SQLDown:     "DROP TABLE products;",
 	})
 	if err != nil {
 		t.Fatalf("CreateDraft gagal: %v", err)
@@ -377,7 +391,7 @@ func TestMigrationLifecycle_FailRollbackThenFixAndCommit(t *testing.T) {
 	}
 
 	targetDB.shouldFailSQL = true
-	targetDB.failErrMsg = `ERROR: syntax error at or near "TABEL" (SQLSTATE 42601)`
+	targetDB.failErrMsg = "temporary target failure"
 
 	execRes1, err := svc.ExecuteMigration(ctx, devUser, dbID, draft.ID)
 	if !errors.Is(err, ErrExecutionFailed) {
@@ -390,16 +404,15 @@ func TestMigrationLifecycle_FailRollbackThenFixAndCommit(t *testing.T) {
 		t.Fatalf("transaksi target DB seharusnya di-rollback")
 	}
 
-	fixedSQL := "CREATE TABLE products (id SERIAL PRIMARY KEY, name TEXT NOT NULL);"
 	_, err = svc.UpdateDraft(ctx, devUser, UpdateDraftInput{
 		DatabaseID:  dbID,
 		MigrationID: draft.ID,
 		Title:       "Buat tabel produk",
-		Description: "Sudah diperbaiki typo TABEL -> TABLE",
-		SQLContent:  fixedSQL,
+		SQLContent:  "CREATE TABLE products (id SERIAL PRIMARY KEY, name TEXT NOT NULL);",
+		SQLDown:     "DROP TABLE products;",
 	})
-	if err != nil {
-		t.Fatalf("UpdateDraft setelah gagal seharusnya diizinkan: %v", err)
+	if !errors.Is(err, ErrDefinitionFrozen) {
+		t.Fatalf("attempted definition should stay frozen: %v", err)
 	}
 
 	targetDB.shouldFailSQL = false
@@ -415,6 +428,12 @@ func TestMigrationLifecycle_FailRollbackThenFixAndCommit(t *testing.T) {
 	if err != nil || len(detail.Runs) != 2 {
 		t.Fatalf("seharusnya terdapat 2 catatan di migration_runs")
 	}
+	first, second := detail.Runs[0], detail.Runs[1]
+	if first.Status != RunStatusFailed || second.Status != RunStatusSucceeded || first.ID == second.ID ||
+		first.Revision != draft.Revision || second.Revision != draft.Revision ||
+		first.SQLSnapshot != draft.SQLContent || second.SQLSnapshot != draft.SQLContent {
+		t.Fatalf("retry did not preserve the original attempt: %+v", detail.Runs)
+	}
 
 	_, err = svc.UpdateDraft(ctx, devUser, UpdateDraftInput{
 		DatabaseID:  dbID,
@@ -424,6 +443,78 @@ func TestMigrationLifecycle_FailRollbackThenFixAndCommit(t *testing.T) {
 	})
 	if !errors.Is(err, ErrAlreadyApplied) {
 		t.Fatalf("mengubah migrasi yang sudah APPLIED harus ditolak dengan ErrAlreadyApplied")
+	}
+}
+
+func TestMigrationCommitUnconfirmedKeepsHistoryOpen(t *testing.T) {
+	ctx := context.Background()
+	authz := newMockAuthorizer()
+	store := newInMemoryStore()
+	targetDB := &mockTargetDB{commitError: errors.New("connection lost after commit")}
+	actor := Principal{UserID: "editor"}
+	authz.Grant(actor.UserID, "db", "VIEW_EDIT")
+	var output bytes.Buffer
+	logger := SlogAuditLogger{Logger: slog.New(slog.NewJSONHandler(&output, nil))}
+	service := NewService(authz, store, targetDB, logger)
+	draft, err := service.CreateDraft(ctx, actor, CreateDraftInput{
+		DatabaseID: "db", Title: "Create sample", SQLContent: "CREATE TABLE samples (id INT);",
+		SQLDown: "DROP TABLE samples;",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.ExecuteMigration(ctx, actor, "db", draft.ID); !errors.Is(err, ErrOutcomeUnconfirmed) {
+		t.Fatalf("expected an unconfirmed target commit: %v", err)
+	}
+	detail, err := service.GetMigrationDetail(ctx, actor, "db", draft.ID)
+	if err != nil || len(detail.Runs) != 1 || detail.Runs[0].Status != RunStatusRunning || detail.Runs[0].FinishedAt != nil {
+		t.Fatalf("the result must stay open: %+v, %v", detail, err)
+	}
+	if len(targetDB.committedSQLs) != 1 || targetDB.rolledBackRuns != 0 {
+		t.Fatal("target SQL must not be retried or marked rolled back")
+	}
+	lastLine := strings.Split(strings.TrimSpace(output.String()), "\n")
+	var event struct {
+		Message     string `json:"msg"`
+		Status      string `json:"status"`
+		ExecutionID int64  `json:"execution_id"`
+	}
+	if err := json.Unmarshal([]byte(lastLine[len(lastLine)-1]), &event); err != nil ||
+		event.Message != "migration_attempt_finished" || event.Status != "UNCONFIRMED" || event.ExecutionID != detail.Runs[0].ID {
+		t.Fatalf("expected a structured outcome for the recorded attempt: %s", output.String())
+	}
+}
+
+func TestMigrationAuditMasksSQLValues(t *testing.T) {
+	ctx := context.Background()
+	authz := newMockAuthorizer()
+	actor := Principal{UserID: "editor"}
+	authz.Grant(actor.UserID, "db", "VIEW_EDIT")
+	var output bytes.Buffer
+	logger := SlogAuditLogger{Logger: slog.New(slog.NewJSONHandler(&output, nil))}
+	service := NewService(authz, newInMemoryStore(), &mockTargetDB{}, logger)
+	sqlUp := "INSERT INTO private_records VALUES (918273645, 'sensitive-pass', $$private-note$$); -- confidential"
+	draft, err := service.CreateDraft(ctx, actor, CreateDraftInput{
+		DatabaseID: "db", Title: "Insert test row", SQLContent: sqlUp,
+		IrreversibleReason: "No safe reversal",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := service.ExecuteMigration(ctx, actor, "db", draft.ID)
+	if err != nil || result.Run.SQLSnapshot != sqlUp {
+		t.Fatalf("the recorded snapshot should retain the executed SQL: %+v, %v", result, err)
+	}
+	logs := output.String()
+	for _, field := range []string{"migration_sql_started", "migration_sql_finished", "migration_transaction_finished", "INSERT INTO ?", "COMMITTED"} {
+		if !strings.Contains(logs, field) {
+			t.Fatalf("log did not contain %q: %s", field, logs)
+		}
+	}
+	for _, secret := range []string{"private_records", "918273645", "sensitive-pass", "private-note", "confidential"} {
+		if strings.Contains(logs, secret) {
+			t.Fatalf("log exposed %q", secret)
+		}
 	}
 }
 
@@ -449,6 +540,7 @@ func TestAccessControl_ViewOnlyCannotMutateOrExecute(t *testing.T) {
 		DatabaseID: dbA,
 		Title:      "Tambah kolom stok",
 		SQLContent: "ALTER TABLE products ADD COLUMN stock INT NOT NULL DEFAULT 0;",
+		SQLDown:    "ALTER TABLE products DROP COLUMN stock;",
 	})
 	if err != nil {
 		t.Fatalf("editor gagal membuat draf: %v", err)
@@ -469,6 +561,12 @@ func TestAccessControl_ViewOnlyCannotMutateOrExecute(t *testing.T) {
 
 	if _, err := svc.ExecuteMigration(ctx, viewer, dbA, migA.ID); !errors.Is(err, ErrForbidden) {
 		t.Fatalf("View Only seharusnya ditolak saat ExecuteMigration")
+	}
+	if _, err := svc.RollbackMigration(ctx, viewer, dbA, migA.ID); !errors.Is(err, ErrForbidden) {
+		t.Fatal("View Only cannot roll back a migration")
+	}
+	if _, err := svc.ForwardMigration(ctx, viewer, dbA, migA.ID); !errors.Is(err, ErrForbidden) {
+		t.Fatal("View Only cannot forward a migration")
 	}
 
 	if _, err := svc.ExecuteMigration(ctx, editor, dbB, migA.ID); !errors.Is(err, ErrDatabaseMismatch) {
@@ -554,9 +652,10 @@ func TestExecuteMigration_RejectsImplicitCommitSQLForMySQL(t *testing.T) {
 	service := NewService(authz, store, targetDB, nil)
 
 	draft, err := service.CreateDraft(ctx, user, CreateDraftInput{
-		DatabaseID: "mysql-db",
-		Title:      "Create table",
-		SQLContent: "CREATE TABLE products (id INT);",
+		DatabaseID:         "mysql-db",
+		Title:              "Create table",
+		SQLContent:         "CREATE TABLE products (id INT);",
+		IrreversibleReason: "Test migration without SQL down",
 	})
 	if err != nil {
 		t.Fatalf("create draft: %v", err)

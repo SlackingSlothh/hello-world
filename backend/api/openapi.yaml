@@ -658,15 +658,9 @@ paths:
         content:
           application/json:
             schema:
-              type: object
-              required: [title, sql_content]
-              properties:
-                title:
-                  type: string
-                description:
-                  type: string
-                sql_content:
-                  type: string
+              allOf:
+                - $ref: "#/components/schemas/MigrationDefinitionInput"
+                - required: [title]
       responses:
         "201":
           description: Draft created.
@@ -681,11 +675,41 @@ paths:
         "403":
           $ref: "#/components/responses/Forbidden"
         "422":
-          description: SQL is invalid or not transaction-safe.
+          description: The rollback definition is incomplete or SQL is invalid.
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
+        "500":
+          $ref: "#/components/responses/OperationFailed"
+  /api/v1/connections/{id}/migrations/history:
+    parameters:
+      - $ref: "#/components/parameters/ConnectionID"
+    get:
+      tags: [Migrations]
+      operationId: listMigrationHistory
+      summary: List all migration attempts for a connection
+      description: Returns attempts in descending execution ID order, including failed and unfinished attempts.
+      x-required-permission: ReadMigration
+      responses:
+        "200":
+          description: Migration attempts for this connection.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [database_id, runs]
+                properties:
+                  database_id:
+                    type: string
+                  runs:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/MigrationHistoryEntry"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
         "500":
           $ref: "#/components/responses/OperationFailed"
   /api/v1/connections/{id}/migrations/{migrationID}:
@@ -718,22 +742,14 @@ paths:
       tags: [Migrations]
       operationId: updateMigration
       summary: Update a draft migration
-      description: Applied migrations cannot be edited.
+      description: Only drafts that have never been attempted can be edited.
       x-required-permission: UpdateMigration
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              type: object
-              required: [sql_content]
-              properties:
-                title:
-                  type: string
-                description:
-                  type: string
-                sql_content:
-                  type: string
+              $ref: "#/components/schemas/MigrationDefinitionInput"
       responses:
         "200":
           description: Updated migration.
@@ -750,13 +766,13 @@ paths:
         "404":
           $ref: "#/components/responses/NotFound"
         "409":
-          description: Migration has already been applied.
+          description: The revision changed or its definition has been frozen by an execution attempt.
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
         "422":
-          description: SQL is invalid or not transaction-safe.
+          description: The rollback definition is incomplete or SQL is invalid.
           content:
             application/json:
               schema:
@@ -789,7 +805,7 @@ paths:
         "404":
           $ref: "#/components/responses/NotFound"
         "409":
-          description: Another migration is running or this migration was already applied.
+          description: A run is in progress or awaiting outcome verification, a forward migration is pending, this migration already applied, or its draft revision changed.
           content:
             application/json:
               schema:
@@ -1520,9 +1536,35 @@ components:
           items:
             type: array
             items: {}
+    MigrationDefinitionInput:
+      type: object
+      required: [sql_content]
+      properties:
+        title:
+          type: string
+        description:
+          type: string
+        sql_content:
+          type: string
+          description: SQL up.
+        sql_down:
+          type: string
+          description: SQL that reverses SQL up.
+        irreversible_reason:
+          type: string
+          description: Why the migration cannot be rolled back.
+      oneOf:
+        - required: [sql_down]
+          properties:
+            sql_down:
+              pattern: '\S'
+        - required: [irreversible_reason]
+          properties:
+            irreversible_reason:
+              pattern: '\S'
     Migration:
       type: object
-      required: [id, database_id, title, description, sql_content, status, created_by, updated_by, created_at, updated_at]
+      required: [id, database_id, title, description, sql_content, revision, status, created_by, updated_by, created_at, updated_at]
       properties:
         id:
           type: integer
@@ -1538,9 +1580,23 @@ components:
           type: string
         sql_content:
           type: string
+          description: SQL up.
+        sql_down:
+          type: string
+        irreversible_reason:
+          type: string
+        revision:
+          type: integer
+          format: int64
+          minimum: 1
+        frozen_at:
+          type: string
+          format: date-time
+          description: When the first execution attempt froze this revision.
         status:
           type: string
           enum: [DRAFT, FAILED, APPLIED]
+          description: APPLIED means the migration has a version. Its latest successful execution determines whether that version is active.
         created_by:
           type: string
         updated_by:
@@ -1556,7 +1612,7 @@ components:
           format: date-time
     MigrationRun:
       type: object
-      required: [id, migration_id, database_id, attempt_number, sql_snapshot, status, executed_by, execution_ms, started_at]
+      required: [id, migration_id, database_id, attempt_number, revision, operation, sql_snapshot, status, executed_by, execution_ms, started_at]
       properties:
         id:
           type: integer
@@ -1568,11 +1624,23 @@ components:
           type: string
         attempt_number:
           type: integer
+        revision:
+          type: integer
+          format: int64
+          minimum: 1
+        operation:
+          type: string
+          enum: [APPLY, ROLLBACK, FORWARD]
+        rollback_target_run_id:
+          type: integer
+          format: int64
+          description: Execution targeted by a rollback attempt. The target is reverted only if the rollback succeeds.
         sql_snapshot:
           type: string
         status:
           type: string
           enum: [RUNNING, SUCCEEDED, FAILED]
+          description: A run remains RUNNING if its outcome has not yet been verified.
         executed_by:
           type: string
         error_message:
@@ -1586,6 +1654,52 @@ components:
         finished_at:
           type: [string, "null"]
           format: date-time
+    MigrationHistoryEntry:
+      type: object
+      required: [id, migration_id, title, reversible, attempt_number, revision, operation, status, sql_snapshot, executed_by, username, started_at, execution_ms]
+      properties:
+        id:
+          type: string
+          description: Execution ID, encoded as decimal text to preserve its full precision.
+        migration_id:
+          type: string
+        title:
+          type: string
+        reversible:
+          type: boolean
+        version:
+          type: integer
+          format: int64
+          description: The version assigned by a successful apply or used by a rollback or forward attempt.
+        attempt_number:
+          type: integer
+        revision:
+          type: integer
+          format: int64
+        operation:
+          type: string
+          enum: [APPLY, ROLLBACK, FORWARD]
+        rollback_target_run_id:
+          type: string
+          description: Execution targeted by the rollback as decimal text. Only a successful rollback reverts it.
+        status:
+          type: string
+          enum: [RUNNING, SUCCEEDED, FAILED]
+        sql_snapshot:
+          type: string
+        executed_by:
+          type: string
+        username:
+          type: string
+        started_at:
+          type: string
+          format: date-time
+        finished_at:
+          type: string
+          format: date-time
+        execution_ms:
+          type: integer
+          format: int64
     MigrationDetail:
       type: object
       required: [migration, runs]

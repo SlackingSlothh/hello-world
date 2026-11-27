@@ -10,6 +10,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	servicemigration "hello-world/internal/services/migration"
 )
 
@@ -222,6 +224,13 @@ func (t *sqlTargetTx) Commit(ctx context.Context) error {
 	}
 	t.closed = true
 	err := t.tx.Commit()
+	if t.dialect == DialectPostgres && err != nil {
+		var pgErr *pgconn.PgError
+		if errors.Is(err, pgx.ErrTxCommitRollback) ||
+			(errors.As(err, &pgErr) && (strings.HasPrefix(pgErr.Code, "23") || pgErr.Code == "40001" || pgErr.Code == "40P01")) {
+			err = errors.Join(servicemigration.ErrTargetCommitRolledBack, err)
+		}
+	}
 	return errors.Join(err, t.release())
 }
 
