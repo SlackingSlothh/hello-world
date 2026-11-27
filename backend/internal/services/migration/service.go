@@ -194,6 +194,7 @@ func (a AccessAuthorizer) RequireDatabase(ctx context.Context, principal Princip
 
 // kontrak penyimpanan data migrasi di database platform
 type Store interface {
+	RequestStore
 	CreateMigration(ctx context.Context, m *Migration) error
 	GetMigrationByID(ctx context.Context, migrationID int64) (*Migration, error)
 	ListMigrationsByDatabase(ctx context.Context, databaseID string) ([]Migration, error)
@@ -202,6 +203,7 @@ type Store interface {
 	CreateRun(ctx context.Context, run *MigrationRun) error
 	MarkSQLDispatchStarted(ctx context.Context, runID int64, evidence TransactionEvidence) error
 	GetRunForReconciliation(ctx context.Context, databaseID string, runID int64) (MigrationRun, TransactionEvidence, error)
+	FailRunBeforeDispatch(ctx context.Context, runID, migrationID int64, errMsg string, finishedAt time.Time) (bool, error)
 	CompleteRunFailed(ctx context.Context, runID, migrationID int64, errMsg string, execMs int64, finishedAt time.Time) error
 	CompleteRunSucceeded(ctx context.Context, runID, migrationID int64, databaseID string, execMs int64, finishedAt time.Time) (assignedVersion int64, err error)
 	ListRunsByMigration(ctx context.Context, migrationID int64) ([]MigrationRun, error)
@@ -1033,7 +1035,13 @@ func (s *Service) failRun(ctx context.Context, m *Migration, run *MigrationRun, 
 	finishCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 	defer cancel()
 	if err := s.store.CompleteRunFailed(finishCtx, run.ID, m.ID, errMsg, execMs, finishTime); err != nil {
-		return nil, fmt.Errorf("%w: recording failed run %d: %w", ErrOutcomeUnconfirmed, run.ID, errors.Join(cause, err))
+		saved, _, readErr := s.store.GetRunForReconciliation(finishCtx, run.DatabaseID, run.ID)
+		if readErr != nil || saved.Status != RunStatusFailed || saved.SQLDispatchStarted == nil || *saved.SQLDispatchStarted ||
+			saved.FinishedAt == nil || saved.ErrorMessage == nil {
+			return nil, fmt.Errorf("%w: recording failed run %d: %w", ErrOutcomeUnconfirmed, run.ID, errors.Join(cause, err))
+		}
+		errMsg, finishTime, execMs = *saved.ErrorMessage, *saved.FinishedAt, saved.ExecutionMs
+		cause = errors.New(errMsg)
 	}
 
 	if run.Operation == RunApply {
