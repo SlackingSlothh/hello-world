@@ -91,3 +91,57 @@ func TestMetricsAndDBPoolCollector(t *testing.T) {
 		}
 	}
 }
+
+func TestDBPoolCollectorAggregatesDuplicateLabels(t *testing.T) {
+	m := NewMetrics()
+	err := m.RegisterDBPoolCollector(func() []PoolStatsSnapshot {
+		return []PoolStatsSnapshot{
+			{
+				PoolType: "target",
+				Database: "k6-target-1",
+				Stats: sql.DBStats{
+					OpenConnections: 2,
+					InUse:           1,
+					Idle:            1,
+					WaitCount:       3,
+					WaitDuration:    100 * time.Millisecond,
+				},
+			},
+			{
+				PoolType: "target",
+				Database: "k6-target-1",
+				Stats: sql.DBStats{
+					OpenConnections: 4,
+					InUse:           2,
+					Idle:            2,
+					WaitCount:       5,
+					WaitDuration:    150 * time.Millisecond,
+				},
+			},
+		}
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+	m.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK even with duplicate target pool names, got %d: %s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	required := []string{
+		`datadock_db_pool_open_connections{database="k6-target-1",pool_type="target"} 6`,
+		`datadock_db_pool_connections_in_use{database="k6-target-1",pool_type="target"} 3`,
+		`datadock_db_pool_connections_idle{database="k6-target-1",pool_type="target"} 3`,
+		`datadock_db_pool_wait_count_total{database="k6-target-1",pool_type="target"} 8`,
+		`datadock_db_pool_wait_duration_seconds_total{database="k6-target-1",pool_type="target"} 0.25`,
+	}
+	for _, needle := range required {
+		if !strings.Contains(body, needle) {
+			t.Fatalf("expected aggregated metric line %q in output:\n%s", needle, body)
+		}
+	}
+}

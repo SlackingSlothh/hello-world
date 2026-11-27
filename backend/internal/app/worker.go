@@ -122,10 +122,16 @@ func RunWorker() error {
 		connection, db, err := registry.ConnectionDB(databaseID)
 		if errors.Is(err, manageddb.ErrNotFound) {
 			if saved, loadErr := connectionStore.LoadAll(ctx); loadErr == nil {
+				validIDs := make(map[string]struct{}, len(saved))
 				for _, cfg := range saved {
+					validIDs[cfg.ID] = struct{}{}
 					if cfg.ID == databaseID {
 						_, _ = registry.Restore(cfg)
-						break
+					}
+				}
+				for _, existing := range registry.List() {
+					if _, keep := validIDs[existing.ID]; !keep {
+						_ = registry.Remove(existing.ID)
 					}
 				}
 			}
@@ -138,7 +144,7 @@ func RunWorker() error {
 	})
 	migrationAudit := migration.SlogAuditLogger{Logger: logger}
 	migrationService := migration.NewService(migration.AccessAuthorizer{Reader: authStore}, migrationStore, migrationConnector, migrationAudit)
-	migrationService.ConfigureAsync(jobStore, lockStore, migration.AllowAllApprovals{}, metrics)
+	migrationService.ConfigureAsync(jobStore, lockStore, migrationStore, metrics)
 
 	hostname, _ := os.Hostname()
 	if hostname == "" {

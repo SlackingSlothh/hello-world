@@ -264,3 +264,53 @@ func readMigrationRequest(ctx context.Context, db migrationRowReader, databaseID
 	}
 	return request, nil
 }
+
+func (ps *PostgresStore) VerifyApproved(ctx context.Context, databaseID string, migrationID int64, action migration.JobAction) error {
+	var op migration.RunOperation
+	switch action {
+	case migration.JobActionResumeBatch, migration.JobActionRevertBatch:
+		return nil
+	case migration.JobActionExecute:
+		op = migration.RunApply
+	case migration.JobActionRollback:
+		op = migration.RunRollback
+	case migration.JobActionForward:
+		op = migration.RunForward
+	default:
+		return migration.ErrNotApproved
+	}
+
+	const q = `
+		SELECT EXISTS (
+			SELECT 1
+			FROM migration_requests r
+			JOIN migrations m ON m.id = r.migration_id
+			WHERE r.database_id = $1
+			  AND r.migration_id = $2
+			  AND r.operation = $3
+			  AND r.revision = m.revision
+			  AND EXISTS (
+				SELECT 1 FROM connection_grants cg
+				WHERE cg.database_id = r.database_id AND cg.access_level IN (1, 2)
+			  )
+			  AND NOT EXISTS (
+				SELECT 1
+				FROM connection_grants cg
+				JOIN access_groups g ON g.id = cg.group_id
+				LEFT JOIN platform_users u ON u.id = g.leader_user_id AND u.active
+				LEFT JOIN migration_request_approvals a
+					ON a.request_id = r.id AND a.group_id = g.id AND a.reviewer_id = u.id
+				WHERE cg.database_id = r.database_id
+				  AND cg.access_level IN (1, 2)
+				  AND (u.id IS NULL OR a.approved_at IS NULL)
+			  )
+		)`
+	var approved bool
+	if err := ps.platformDB.QueryRowContext(ctx, q, databaseID, migrationID, op).Scan(&approved); err != nil {
+		return err
+	}
+	if !approved {
+		return migration.ErrNotApproved
+	}
+	return nil
+}

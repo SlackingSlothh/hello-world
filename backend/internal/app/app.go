@@ -144,7 +144,7 @@ func Run() error {
 	})
 	migrationAudit := migration.SlogAuditLogger{Logger: logger}
 	migrationService := migration.NewService(migration.AccessAuthorizer{Reader: authStore}, migrationStore, migrationConnector, migrationAudit)
-	migrationService.ConfigureAsync(jobStore, lockStore, migration.AllowAllApprovals{}, metrics)
+	migrationService.ConfigureAsync(jobStore, lockStore, migrationStore, metrics)
 	databaseAPI := handler.New(connections, catalogService, accessapp.Service{Store: authStore, Users: authStore, Groups: authStore, Memberships: authStore}, handler.NewSecurity(application.Authentication, application.Authorization), migrationService)
 	if err := application.HandleRoute("/api/v1/", databaseAPI); err != nil {
 		_ = registry.Close()
