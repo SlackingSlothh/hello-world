@@ -59,7 +59,7 @@ func (ps *PostgresStore) CreateMigrationRequest(ctx context.Context, request mig
 
 func (ps *PostgresStore) GetMigrationRequest(ctx context.Context, databaseID string, requestID int64) (migration.MigrationRequest, error) {
 	request, err := readMigrationRequest(ctx, ps.platformDB, databaseID, requestID, false)
-	if err != nil || request.Status == migration.RequestStale {
+	if err != nil || request.Status == migration.RequestStale || request.Status == migration.RequestQueued {
 		return request, err
 	}
 	err = validateMigrationRequestTarget(ctx, ps.platformDB, request)
@@ -83,6 +83,9 @@ func (ps *PostgresStore) ApproveMigrationRequest(ctx context.Context, databaseID
 	}
 	if request.Status == migration.RequestStale {
 		return migration.MigrationRequest{}, migration.ErrRevisionChanged
+	}
+	if request.Status == migration.RequestQueued {
+		return migration.MigrationRequest{}, migration.ErrInvalidJobState
 	}
 	if err := validateMigrationRequestTarget(ctx, tx, request); err != nil {
 		return migration.MigrationRequest{}, err
@@ -109,6 +112,79 @@ func (ps *PostgresStore) ApproveMigrationRequest(ctx context.Context, databaseID
 		return migration.MigrationRequest{}, migration.ErrForbidden
 	}
 	return commitMigrationRequest(ctx, tx, databaseID, requestID)
+}
+
+func (ps *PostgresStore) EnqueueMigrationRequest(ctx context.Context, databaseID string, requestID int64, actorID string, enqueuedAt time.Time, traceContext []byte) (string, bool, error) {
+	tx, err := ps.platformDB.BeginTx(ctx, nil)
+	if err != nil {
+		return "", false, err
+	}
+	defer tx.Rollback()
+	// Use the same lock as successful runs while checking the active migration order.
+	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock($1)`, migration.AdvisoryLockKey(databaseID)); err != nil {
+		return "", false, err
+	}
+	request, err := readMigrationRequest(ctx, tx, databaseID, requestID, true)
+	if err != nil {
+		return "", false, err
+	}
+	if request.RequestedBy != actorID {
+		return "", false, migration.ErrForbidden
+	}
+
+	job := migration.Job{
+		MigrationID: request.MigrationID, DatabaseID: databaseID, ActorID: actorID,
+		Status: migration.JobStatusPending, MaxRetries: 3, TraceContext: traceContext,
+		EnqueuedAt: enqueuedAt, UpdatedAt: enqueuedAt,
+	}
+	const jobFields = `SELECT u.username, m.execution_mode, NULLIF(m.batch_by_attribute, ''), m.batch_size,
+		gen_random_uuid()::text, gen_random_uuid()::text
+		FROM platform_users u JOIN migrations m ON m.id = $3
+		WHERE u.id = $1 AND u.active AND EXISTS (
+			SELECT 1 FROM user_group_memberships gm
+			JOIN connection_grants cg ON cg.group_id = gm.group_id AND cg.database_id = $2 AND cg.access_level = 2
+			WHERE gm.user_id = u.id
+		)`
+	err = tx.QueryRowContext(ctx, jobFields, actorID, databaseID, request.MigrationID).
+		Scan(&job.ActorUsername, &job.Mode, &job.BatchByAttribute, &job.BatchSize, &job.JobID, &job.ExecutionID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", false, migration.ErrForbidden
+	}
+	if err != nil {
+		return "", false, err
+	}
+	switch request.Status {
+	case migration.RequestQueued:
+		return *request.JobID, false, nil
+	case migration.RequestStale:
+		return "", false, migration.ErrRevisionChanged
+	case migration.RequestApproved:
+	default:
+		return "", false, migration.ErrNotApproved
+	}
+	if err := validateMigrationRequestTarget(ctx, tx, request); err != nil {
+		return "", false, err
+	}
+	switch request.Operation {
+	case migration.RunApply:
+		job.Action = migration.JobActionExecute
+	case migration.RunRollback:
+		job.Action = migration.JobActionRollback
+	case migration.RunForward:
+		job.Action = migration.JobActionForward
+	default:
+		return "", false, migration.ErrInvalidMigrationRequest
+	}
+	if err := NewJobStore(ps.platformDB).EnqueueJobTx(ctx, tx, &job); err != nil {
+		return "", false, err
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE migration_requests SET job_id = $1 WHERE id = $2`, job.JobID, request.ID); err != nil {
+		return "", false, err
+	}
+	if err := tx.Commit(); err != nil {
+		return "", false, err
+	}
+	return job.JobID, true, nil
 }
 
 func commitMigrationRequest(ctx context.Context, tx *sql.Tx, databaseID string, requestID int64) (migration.MigrationRequest, error) {
@@ -139,7 +215,7 @@ func validateMigrationRequestTarget(ctx context.Context, db migrationRowReader, 
 
 func readMigrationRequest(ctx context.Context, db migrationRowReader, databaseID string, requestID int64, lock bool) (migration.MigrationRequest, error) {
 	query := `SELECT r.id, r.migration_id, r.database_id, r.operation, r.revision, r.target_run_id,
-		r.sql_snapshot, r.requested_by, r.created_at, m.revision, m.status,
+		r.sql_snapshot, r.requested_by, r.created_at, r.job_id::text, m.revision, m.status,
 		COALESCE((SELECT jsonb_agg(jsonb_build_object(
 			'group_id', g.id, 'group_name', g.name, 'leader_id', u.id, 'approved_at', a.approved_at
 		) ORDER BY g.id)
@@ -159,7 +235,7 @@ func readMigrationRequest(ctx context.Context, db migrationRowReader, databaseID
 	var reviews []byte
 	err := db.QueryRowContext(ctx, query, requestID, databaseID).Scan(
 		&request.ID, &request.MigrationID, &request.DatabaseID, &request.Operation, &request.Revision, &request.TargetRunID,
-		&request.SQLSnapshot, &request.RequestedBy, &request.CreatedAt, &currentRevision, &currentStatus, &reviews)
+		&request.SQLSnapshot, &request.RequestedBy, &request.CreatedAt, &request.JobID, &currentRevision, &currentStatus, &reviews)
 	if errors.Is(err, sql.ErrNoRows) {
 		return migration.MigrationRequest{}, migration.ErrNotFound
 	}
@@ -168,6 +244,10 @@ func readMigrationRequest(ctx context.Context, db migrationRowReader, databaseID
 	}
 	if err := json.Unmarshal(reviews, &request.Reviews); err != nil {
 		return migration.MigrationRequest{}, err
+	}
+	if request.JobID != nil {
+		request.Status = migration.RequestQueued
+		return request, nil
 	}
 	request.Status = migration.RequestPendingReview
 	if currentRevision != request.Revision || (request.Operation == migration.RunApply && currentStatus == migration.StatusApplied) {

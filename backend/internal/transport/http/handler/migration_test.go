@@ -408,4 +408,51 @@ func TestMigrationRequestApprovalRouteAllowsViewOnly(t *testing.T) {
 	}
 }
 
+type routeRequestEnqueuer struct {
+	migration.RequestStore
+	err error
+}
+
+func (s routeRequestEnqueuer) EnqueueMigrationRequest(_ context.Context, databaseID string, requestID int64, actorID string, _ time.Time, _ []byte) (string, bool, error) {
+	if databaseID != "connection-1" || requestID != 42 || actorID != "requester" {
+		return "", false, migration.ErrNotFound
+	}
+	if s.err != nil {
+		return "", false, s.err
+	}
+	return "a5e43a4a-5011-4f32-a44b-2ffe7e071f0a", true, nil
+}
+
+func TestMigrationRequestExecuteRoute(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		level  authz.AccessLevel
+		err    error
+		status int
+	}{
+		{"approved", authz.ViewEdit, nil, http.StatusAccepted},
+		{"pending review", authz.ViewEdit, migration.ErrNotApproved, http.StatusConflict},
+		{"view-only", authz.ViewOnly, nil, http.StatusForbidden},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store := newRouteMigrationStore()
+			store.RequestStore = routeRequestEnqueuer{err: tc.err}
+			access := authz.UserAccess{
+				UserID: "requester", Active: true, GroupIDs: []string{"group"},
+				Grants: []authz.GroupGrant{{GroupID: "group", DatabaseID: "connection-1", Level: tc.level}},
+			}
+			service := migration.NewService(migration.AccessAuthorizer{Reader: migrationAccessReader{access: access}}, store, routeTargetConnector{}, nil)
+			api := handler.New(connectionappServiceForTest(), catalogapp.Service{}, accessapp.Service{}, migrationRouteSecurity{access: access}, service)
+			response := httptest.NewRecorder()
+			api.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/api/v1/connections/connection-1/migration-requests/42/execute", nil))
+			if response.Code != tc.status {
+				t.Fatalf("got %d, want %d: %s", response.Code, tc.status, response.Body.String())
+			}
+			if tc.status == http.StatusAccepted && strings.TrimSpace(response.Body.String()) != `{"job_id":"a5e43a4a-5011-4f32-a44b-2ffe7e071f0a"}` {
+				t.Fatalf("expected accepted job ID: %s", response.Body.String())
+			}
+		})
+	}
+}
+
 func connectionappServiceForTest() connectionapp.Service { return connectionapp.Service{} }

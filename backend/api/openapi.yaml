@@ -895,7 +895,39 @@ paths:
         "404":
           $ref: "#/components/responses/NotFound"
         "409":
-          description: The reviewed revision or operation target changed.
+          description: The reviewed revision or operation target changed, or the request was already queued.
+  /api/v1/connections/{id}/migration-requests/{requestID}/execute:
+    post:
+      tags: [Migrations]
+      operationId: enqueueMigrationRequest
+      summary: Queue an approved migration request
+      description: Only the requester can queue the approved operation. Repeated calls return the original job ID.
+      x-required-permission: ExecuteMigration
+      parameters:
+        - $ref: "#/components/parameters/ConnectionID"
+        - $ref: "#/components/parameters/MigrationRequestID"
+      responses:
+        "202":
+          description: The migration job was accepted.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [job_id]
+                properties:
+                  job_id:
+                    type: string
+                    format: uuid
+        "400":
+          $ref: "#/components/responses/InvalidRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: Approval is incomplete, or the reviewed revision or operation target changed.
   /api/v1/connections/{id}/migrations/{migrationID}/execute:
     post:
       tags: [Migrations]
@@ -1705,7 +1737,10 @@ components:
           format: date-time
         status:
           type: string
-          enum: [PENDING_REVIEW, APPROVED, STALE]
+          enum: [PENDING_REVIEW, APPROVED, QUEUED, STALE]
+        job_id:
+          type: string
+          format: uuid
         reviews:
           type: array
           items:

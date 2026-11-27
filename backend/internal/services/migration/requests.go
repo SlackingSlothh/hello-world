@@ -5,6 +5,8 @@ import (
 	"errors"
 	"strings"
 	"time"
+
+	"hello-world/internal/observability"
 )
 
 var ErrInvalidMigrationRequest = errors.New("migration: invalid request operation or revision")
@@ -14,6 +16,7 @@ type RequestStatus string
 const (
 	RequestPendingReview RequestStatus = "PENDING_REVIEW"
 	RequestApproved      RequestStatus = "APPROVED"
+	RequestQueued        RequestStatus = "QUEUED"
 	RequestStale         RequestStatus = "STALE"
 )
 
@@ -28,6 +31,7 @@ type MigrationRequest struct {
 	RequestedBy string        `json:"requested_by"`
 	CreatedAt   time.Time     `json:"created_at"`
 	Status      RequestStatus `json:"status"`
+	JobID       *string       `json:"job_id,omitempty"`
 	Reviews     []GroupReview `json:"reviews"`
 }
 
@@ -38,10 +42,15 @@ type GroupReview struct {
 	ApprovedAt *time.Time `json:"approved_at,omitempty"`
 }
 
+type EnqueueResult struct {
+	JobID string `json:"job_id"`
+}
+
 type RequestStore interface {
 	CreateMigrationRequest(context.Context, MigrationRequest) (MigrationRequest, error)
 	GetMigrationRequest(ctx context.Context, databaseID string, requestID int64) (MigrationRequest, error)
 	ApproveMigrationRequest(ctx context.Context, databaseID string, requestID int64, groupID, reviewerID string, approvedAt time.Time) (MigrationRequest, error)
+	EnqueueMigrationRequest(ctx context.Context, databaseID string, requestID int64, actorID string, enqueuedAt time.Time, traceContext []byte) (jobID string, created bool, err error)
 }
 
 func (s *Service) SubmitMigrationRequest(ctx context.Context, principal Principal, databaseID string, migrationID, revision int64, operation RunOperation) (MigrationRequest, error) {
@@ -89,4 +98,26 @@ func (s *Service) ApproveMigrationRequest(ctx context.Context, principal Princip
 		})
 	}
 	return request, err
+}
+
+func (s *Service) EnqueueMigrationRequest(ctx context.Context, principal Principal, databaseID string, requestID int64) (EnqueueResult, error) {
+	if err := s.authorize(ctx, principal, databaseID, ActionExecuteMigration); err != nil {
+		return EnqueueResult{}, err
+	}
+	traceContext, err := observability.InjectTraceContext(ctx)
+	if err != nil {
+		return EnqueueResult{}, err
+	}
+	now := s.nowFn()
+	jobID, created, err := s.store.EnqueueMigrationRequest(ctx, databaseID, requestID, principal.UserID, now, traceContext)
+	if err != nil {
+		return EnqueueResult{}, err
+	}
+	if created {
+		s.logAudit(ctx, AuditEvent{
+			ActorUserID: principal.UserID, Action: "migration_request_enqueued", ObjectType: "migration_request",
+			ObjectID: requestID, DatabaseID: databaseID, JobID: jobID, Status: string(RequestQueued), CreatedAt: now,
+		})
+	}
+	return EnqueueResult{JobID: jobID}, nil
 }

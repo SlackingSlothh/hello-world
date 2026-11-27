@@ -196,6 +196,23 @@ func (h *Handler) approveMigrationRequest(w http.ResponseWriter, r *http.Request
 	writeJSON(w, http.StatusOK, request)
 }
 
+func (h *Handler) enqueueMigrationRequest(w http.ResponseWriter, r *http.Request) {
+	principal, ok := h.migrationPrincipal(w, r)
+	if !ok {
+		return
+	}
+	requestID, ok := parsePositivePathID(w, r, "requestID", "request ID")
+	if !ok {
+		return
+	}
+	result, err := h.migrations.EnqueueMigrationRequest(r.Context(), principal, r.PathValue("id"), requestID)
+	if err != nil {
+		writeMigrationError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusAccepted, result)
+}
+
 func (h *Handler) reconcileMigrationRun(w http.ResponseWriter, r *http.Request) {
 	principal, ok := h.migrationPrincipal(w, r)
 	if !ok {
@@ -291,6 +308,10 @@ func writeMigrationError(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusNotFound, "not_found", "migration not found")
 	case errors.Is(err, migration.ErrInvalidMigrationRequest):
 		writeError(w, http.StatusBadRequest, "invalid_request", "provide an apply, rollback, or forward operation and a positive revision")
+	case errors.Is(err, migration.ErrNotApproved):
+		writeError(w, http.StatusConflict, "migration_not_approved", "all required group leaders must approve before execution")
+	case errors.Is(err, migration.ErrInvalidJobState):
+		writeError(w, http.StatusConflict, "migration_invalid_job_state", "the current job state does not allow this operation")
 	case errors.Is(err, migration.ErrMigrationLocked):
 		writeError(w, http.StatusConflict, "migration_locked", "a migration is running or awaiting outcome verification for this connection")
 	case errors.Is(err, migration.ErrOutcomeUnconfirmed):
