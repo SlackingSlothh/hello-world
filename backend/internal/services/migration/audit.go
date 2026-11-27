@@ -98,6 +98,9 @@ func (s *Service) logRun(ctx context.Context, m *Migration, run *MigrationRun, e
 	event.ObjectID = run.MigrationID
 	event.ObjectType = "migration"
 	event.DatabaseID = run.DatabaseID
+	if run.JobID != nil {
+		event.JobID = *run.JobID
+	}
 	event.ExecutionID = run.ID
 	event.Operation = run.Operation
 	event.AttemptNumber = run.AttemptNumber
