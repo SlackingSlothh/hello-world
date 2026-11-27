@@ -1,0 +1,220 @@
+{
+  "uid": "datadock-observability",
+  "title": "DataDock Async Migrations & DB Pool Observability",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "5s",
+  "time": {
+    "from": "now-15m",
+    "to": "now"
+  },
+  "timezone": "browser",
+  "tags": ["datadock", "migrations", "observability"],
+  "panels": [
+    {
+      "id": 1,
+      "type": "timeseries",
+      "title": "Migration Jobs by Status",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "fieldConfig": {
+        "defaults": { "unit": "short" },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (database, status) (datadock_migration_jobs_by_status)",
+          "legendFormat": "{{database}} · {{status}}"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "Completed Jobs & Retries (5m)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "fieldConfig": {
+        "defaults": { "unit": "short" },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (database, status, mode, action) (increase(datadock_migration_jobs_completed_total[5m]))",
+          "legendFormat": "completed {{database}} {{mode}}/{{action}} ({{status}})"
+        },
+        {
+          "refId": "B",
+          "expr": "sum by (database, mode, action) (increase(datadock_migration_job_retries_total[5m]))",
+          "legendFormat": "retries {{database}} {{mode}}/{{action}}"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "Queue Wait Latency (p50 / p95)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 8 },
+      "fieldConfig": {
+        "defaults": { "unit": "s" },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.50, sum by (le, database, mode) (rate(datadock_migration_queue_wait_seconds_bucket[5m])))",
+          "legendFormat": "p50 {{database}} ({{mode}})"
+        },
+        {
+          "refId": "B",
+          "expr": "histogram_quantile(0.95, sum by (le, database, mode) (rate(datadock_migration_queue_wait_seconds_bucket[5m])))",
+          "legendFormat": "p95 {{database}} ({{mode}})"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "Database Lock Wait Latency (p50 / p95)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 8 },
+      "fieldConfig": {
+        "defaults": { "unit": "s" },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.50, sum by (le, database) (rate(datadock_migration_lock_wait_seconds_bucket[5m])))",
+          "legendFormat": "p50 {{database}}"
+        },
+        {
+          "refId": "B",
+          "expr": "histogram_quantile(0.95, sum by (le, database) (rate(datadock_migration_lock_wait_seconds_bucket[5m])))",
+          "legendFormat": "p95 {{database}}"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Migration Execution Duration (p50 / p95)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 8 },
+      "fieldConfig": {
+        "defaults": { "unit": "s" },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.50, sum by (le, database, mode, action) (rate(datadock_migration_execution_duration_seconds_bucket[5m])))",
+          "legendFormat": "p50 {{database}} {{mode}}/{{action}}"
+        },
+        {
+          "refId": "B",
+          "expr": "histogram_quantile(0.95, sum by (le, database, mode, action) (rate(datadock_migration_execution_duration_seconds_bucket[5m])))",
+          "legendFormat": "p95 {{database}} {{mode}}/{{action}}"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "Batch Progress (Batches & Rows Committed)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 16 },
+      "fieldConfig": {
+        "defaults": { "unit": "short" },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (database, direction) (rate(datadock_migration_batches_processed_total[1m]))",
+          "legendFormat": "batches/s {{database}} ({{direction}})"
+        },
+        {
+          "refId": "B",
+          "expr": "sum by (database, direction) (rate(datadock_migration_rows_processed_total[1m]))",
+          "legendFormat": "rows/s {{database}} ({{direction}})"
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "type": "timeseries",
+      "title": "DB Connection Pool Active / Idle / Open",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 16 },
+      "fieldConfig": {
+        "defaults": { "unit": "short" },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "datadock_db_pool_connections_in_use",
+          "legendFormat": "in_use {{service}} {{pool_type}}/{{database}}"
+        },
+        {
+          "refId": "B",
+          "expr": "datadock_db_pool_connections_idle",
+          "legendFormat": "idle {{service}} {{pool_type}}/{{database}}"
+        },
+        {
+          "refId": "C",
+          "expr": "datadock_db_pool_open_connections",
+          "legendFormat": "open {{service}} {{pool_type}}/{{database}}"
+        }
+      ]
+    },
+    {
+      "id": 8,
+      "type": "timeseries",
+      "title": "DB Connection Pool Wait Count & Duration",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 24 },
+      "fieldConfig": {
+        "defaults": { "unit": "s" },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "rate(datadock_db_pool_wait_duration_seconds_total[5m])",
+          "legendFormat": "wait_s/s {{service}} {{pool_type}}/{{database}}"
+        },
+        {
+          "refId": "B",
+          "expr": "rate(datadock_db_pool_wait_count_total[5m])",
+          "legendFormat": "waits/s {{service}} {{pool_type}}/{{database}}"
+        }
+      ]
+    },
+    {
+      "id": 9,
+      "type": "logs",
+      "title": "Recent Structured Activity Logs (Loki -> Tempo Trace Link)",
+      "datasource": { "type": "loki", "uid": "loki" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 24 },
+      "options": {
+        "dedupStrategy": "none",
+        "enableLogDetails": true,
+        "showLabels": true,
+        "showTime": true,
+        "sortOrder": "Descending",
+        "wrapLogMessage": true
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "{service_name=~\"datadock-api|datadock-worker\"}"
+        }
+      ]
+    }
+  ]
+}

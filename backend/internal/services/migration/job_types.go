@@ -1,6 +1,7 @@
 package migration
 
 import (
+	"context"
 	"errors"
 	"time"
 )
@@ -11,6 +12,7 @@ var (
 	ErrLockNotFound    = errors.New("migration: database lock not found")
 	ErrNotApproved     = errors.New("migration: all required group leaders must approve before execution")
 	ErrInvalidJobState = errors.New("migration: invalid job state for requested operation")
+	ErrAsyncUnavailable = errors.New("migration: async job queue is not configured")
 )
 
 type ExecutionMode string
@@ -135,4 +137,60 @@ type BatchStepResult struct {
 	Checkpoint       BatchCheckpoint
 	AlreadyCommitted bool
 	Done             bool
+}
+
+type EnqueueResult struct {
+	JobID       string    `json:"job_id"`
+	ExecutionID string    `json:"execution_id,omitempty"`
+	Status      JobStatus `json:"status,omitempty"`
+}
+
+type ApprovalChecker interface {
+	VerifyApproved(ctx context.Context, databaseID string, migrationID int64, action JobAction) error
+}
+
+type ApprovalCheckerFunc func(ctx context.Context, databaseID string, migrationID int64, action JobAction) error
+
+func (fn ApprovalCheckerFunc) VerifyApproved(ctx context.Context, databaseID string, migrationID int64, action JobAction) error {
+	return fn(ctx, databaseID, migrationID, action)
+}
+
+type AllowAllApprovals struct{}
+
+func (AllowAllApprovals) VerifyApproved(context.Context, string, int64, JobAction) error {
+	return nil
+}
+
+type JobStore interface {
+	EnqueueJob(ctx context.Context, job *Job) error
+	GetJob(ctx context.Context, jobID string) (*Job, error)
+	GetJobByExecutionID(ctx context.Context, executionID string) (*Job, error)
+	ListJobsByDatabase(ctx context.Context, databaseID string, limit, offset int) ([]Job, error)
+	ClaimNextJob(ctx context.Context, workerID string, leaseDuration time.Duration, now time.Time) (*Job, *DatabaseLock, error)
+	SetTargetScopeMax(ctx context.Context, jobID, scopeMax string, now time.Time) error
+	UpdateBatchProgress(ctx context.Context, jobID string, lastBatch int, lastCursor string, committedRows int64, now time.Time) error
+	ScheduleRetry(ctx context.Context, jobID string, nextRetryAt time.Time, errMsg, sqlState string, now time.Time) error
+	FinishJob(ctx context.Context, jobID string, status JobStatus, errMsg, sqlState *string, now time.Time) error
+	RequeueRecoveredJob(ctx context.Context, jobID string, lastBatch int, lastCursor *string, committedRows int64, nextRetryAt time.Time, now time.Time) error
+	CountJobsByStatus(ctx context.Context) ([]JobStatusMetric, error)
+}
+
+type LockStore interface {
+	AcquireLock(ctx context.Context, lock DatabaseLock) error
+	TakeoverPartialLock(ctx context.Context, databaseID, jobID, executionID, workerID string, acquiredAt, leaseExpiresAt time.Time) error
+	GetLock(ctx context.Context, databaseID string) (*DatabaseLock, error)
+	RenewLease(ctx context.Context, databaseID, jobID, workerID string, leaseExpiresAt time.Time) error
+	TransitionLockState(ctx context.Context, databaseID, jobID string, newState LockState, executionID string) error
+	ReleaseLock(ctx context.Context, databaseID, jobID string) error
+	SweepExpiredLeases(ctx context.Context, now time.Time) ([]DatabaseLock, error)
+	ListUncertainLocks(ctx context.Context) ([]DatabaseLock, error)
+}
+
+type BatchTargetConnector interface {
+	EnsureCheckpointSchema(ctx context.Context, databaseID string) error
+	ResolveTargetScopeMax(ctx context.Context, databaseID, sqlQuery, cursorCol string) (string, error)
+	ExecuteBatchStep(ctx context.Context, databaseID string, req BatchStepRequest) (BatchStepResult, error)
+	RevertBatchStep(ctx context.Context, databaseID string, req RevertStepRequest) (BatchStepResult, error)
+	ListCheckpoints(ctx context.Context, databaseID, executionID string, direction CheckpointDirection) ([]BatchCheckpoint, error)
+	ExecNormalTx(ctx context.Context, databaseID, sqlQuery string) (int64, error)
 }

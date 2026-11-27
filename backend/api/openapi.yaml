@@ -935,19 +935,19 @@ paths:
     post:
       tags: [Migrations]
       operationId: executeMigration
-      summary: Execute a migration
-      description: Runs the migration in a target transaction, records the execution attempt, and assigns a linear version on success.
+      summary: Enqueue a migration execution job
+      description: Publishes an asynchronous execution job to the persistent queue and returns immediately with a job ID.
       x-required-permission: ExecuteMigration
       parameters:
         - $ref: "#/components/parameters/ConnectionID"
         - $ref: "#/components/parameters/MigrationID"
       responses:
-        "200":
-          description: Execution result, including migration and run state.
+        "202":
+          description: Migration job accepted and enqueued.
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/ExecuteResult"
+                $ref: "#/components/schemas/EnqueueResult"
         "400":
           $ref: "#/components/responses/InvalidRequest"
         "401":
@@ -957,19 +957,206 @@ paths:
         "404":
           $ref: "#/components/responses/NotFound"
         "409":
-          description: A run is in progress or awaiting outcome verification, a forward migration is pending, this migration already applied, or its draft revision changed.
+          description: Conflict with current migration state.
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
         "422":
-          description: SQL validation or execution failed; failed target execution is rolled back.
+          description: SQL validation failed.
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
         "500":
           $ref: "#/components/responses/OperationFailed"
+  /api/v1/connections/{id}/migrations/{migrationID}/rollback:
+    post:
+      tags: [Migrations]
+      operationId: rollbackMigration
+      summary: Enqueue a migration rollback job
+      x-required-permission: ExecuteMigration
+      parameters:
+        - $ref: "#/components/parameters/ConnectionID"
+        - $ref: "#/components/parameters/MigrationID"
+      responses:
+        "202":
+          description: Rollback job accepted and enqueued.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnqueueResult"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: Migration order conflict.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "422":
+          description: Migration is irreversible.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /api/v1/connections/{id}/migrations/{migrationID}/forward:
+    post:
+      tags: [Migrations]
+      operationId: forwardMigration
+      summary: Enqueue a migration forward job
+      x-required-permission: ExecuteMigration
+      parameters:
+        - $ref: "#/components/parameters/ConnectionID"
+        - $ref: "#/components/parameters/MigrationID"
+      responses:
+        "202":
+          description: Forward job accepted and enqueued.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnqueueResult"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: Migration order conflict.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /api/v1/connections/{id}/jobs:
+    parameters:
+      - $ref: "#/components/parameters/ConnectionID"
+    get:
+      tags: [Migrations]
+      operationId: listJobs
+      summary: List asynchronous migration jobs for a connection
+      x-required-permission: ReadMigration
+      responses:
+        "200":
+          description: Migration jobs for this connection.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [database_id, jobs]
+                properties:
+                  database_id:
+                    type: string
+                  jobs:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/MigrationJob"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+  /api/v1/jobs/{jobID}:
+    get:
+      tags: [Migrations]
+      operationId: getJob
+      summary: Get asynchronous migration job status and progress
+      x-required-permission: ReadMigration
+      parameters:
+        - name: jobID
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Current job state and batch progress.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MigrationJob"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /api/v1/connections/{id}/jobs/{jobID}/resume:
+    post:
+      tags: [Migrations]
+      operationId: resumeBatchJob
+      summary: Enqueue resume from checkpoint for a partial batch job
+      x-required-permission: ExecuteMigration
+      parameters:
+        - $ref: "#/components/parameters/ConnectionID"
+        - name: jobID
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "202":
+          description: Resume batch job accepted and enqueued.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnqueueResult"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: Job is not in partial state.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /api/v1/connections/{id}/jobs/{jobID}/revert:
+    post:
+      tags: [Migrations]
+      operationId: revertBatchJob
+      summary: Enqueue compensating batch revert for a partial or partially reverted job
+      x-required-permission: ExecuteMigration
+      parameters:
+        - $ref: "#/components/parameters/ConnectionID"
+        - name: jobID
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "202":
+          description: Revert batch job accepted and enqueued.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnqueueResult"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: Job is not in partial or partially_reverted state.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "422":
+          description: Migration is irreversible.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
   /api/v1/connections/{id}/migrations/explain:
     post:
       tags: [Migrations]
@@ -1782,6 +1969,15 @@ components:
         irreversible_reason:
           type: string
           description: Why the migration cannot be rolled back.
+        execution_mode:
+          type: string
+          enum: [normal, batch]
+          default: normal
+        batch_by_attribute:
+          type: string
+        batch_size:
+          type: integer
+          minimum: 1
       oneOf:
         - required: [sql_down]
           properties:
@@ -1814,6 +2010,13 @@ components:
           type: string
         irreversible_reason:
           type: string
+        execution_mode:
+          type: string
+          enum: [normal, batch]
+        batch_by_attribute:
+          type: string
+        batch_size:
+          type: [integer, "null"]
         revision:
           type: integer
           format: int64
@@ -1955,6 +2158,86 @@ components:
           $ref: "#/components/schemas/Migration"
         run:
           $ref: "#/components/schemas/MigrationRun"
+    EnqueueResult:
+      type: object
+      required: [job_id, execution_id, status]
+      properties:
+        job_id:
+          type: string
+          format: uuid
+        execution_id:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum: [pending, running, success, failed, partial, partially_reverted, uncertain]
+    MigrationJob:
+      type: object
+      required: [job_id, migration_id, execution_id, database_id, actor_id, actor_username, action, mode, status, last_committed_batch, committed_rows, attempt, max_retries, enqueued_at, updated_at]
+      properties:
+        job_id:
+          type: string
+          format: uuid
+        migration_id:
+          type: integer
+          format: int64
+        execution_id:
+          type: string
+          format: uuid
+        parent_execution_id:
+          type: string
+          format: uuid
+        database_id:
+          type: string
+        actor_id:
+          type: string
+        actor_username:
+          type: string
+        action:
+          type: string
+          enum: [execute, rollback, forward, resume_batch, revert_batch]
+        mode:
+          type: string
+          enum: [normal, batch]
+        status:
+          type: string
+          enum: [pending, running, success, failed, partial, partially_reverted, uncertain]
+        batch_by_attribute:
+          type: string
+        batch_size:
+          type: integer
+        target_scope_max:
+          type: string
+        last_committed_batch:
+          type: integer
+        last_committed_cursor:
+          type: string
+        committed_rows:
+          type: integer
+          format: int64
+        attempt:
+          type: integer
+        max_retries:
+          type: integer
+        next_retry_at:
+          type: string
+          format: date-time
+        error_message:
+          type: string
+        sqlstate:
+          type: string
+        enqueued_at:
+          type: string
+          format: date-time
+        started_at:
+          type: string
+          format: date-time
+        finished_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
     ExplainPlan:
       type: object
       required: [node_type, startup_cost, total_cost, plan_rows, raw_json]

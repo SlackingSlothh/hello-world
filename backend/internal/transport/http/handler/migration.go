@@ -64,11 +64,14 @@ func (h *Handler) createMigration(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
-		Title              string `json:"title"`
-		Description        string `json:"description"`
-		SQLContent         string `json:"sql_content"`
-		SQLDown            string `json:"sql_down"`
-		IrreversibleReason string `json:"irreversible_reason"`
+		Title              string                  `json:"title"`
+		Description        string                  `json:"description"`
+		SQLContent         string                  `json:"sql_content"`
+		SQLDown            string                  `json:"sql_down"`
+		IrreversibleReason string                  `json:"irreversible_reason"`
+		ExecutionMode      migration.ExecutionMode `json:"execution_mode"`
+		BatchByAttribute   string                  `json:"batch_by_attribute"`
+		BatchSize          *int                    `json:"batch_size"`
 	}
 	if !decode(w, r, &body) {
 		return
@@ -80,6 +83,9 @@ func (h *Handler) createMigration(w http.ResponseWriter, r *http.Request) {
 		SQLContent:         body.SQLContent,
 		SQLDown:            body.SQLDown,
 		IrreversibleReason: body.IrreversibleReason,
+		ExecutionMode:      body.ExecutionMode,
+		BatchByAttribute:   body.BatchByAttribute,
+		BatchSize:          body.BatchSize,
 	})
 	if err != nil {
 		writeMigrationError(w, err)
@@ -98,11 +104,14 @@ func (h *Handler) updateMigration(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
-		Title              string `json:"title"`
-		Description        string `json:"description"`
-		SQLContent         string `json:"sql_content"`
-		SQLDown            string `json:"sql_down"`
-		IrreversibleReason string `json:"irreversible_reason"`
+		Title              string                  `json:"title"`
+		Description        string                  `json:"description"`
+		SQLContent         string                  `json:"sql_content"`
+		SQLDown            string                  `json:"sql_down"`
+		IrreversibleReason string                  `json:"irreversible_reason"`
+		ExecutionMode      migration.ExecutionMode `json:"execution_mode"`
+		BatchByAttribute   string                  `json:"batch_by_attribute"`
+		BatchSize          *int                    `json:"batch_size"`
 	}
 	if !decode(w, r, &body) {
 		return
@@ -115,6 +124,9 @@ func (h *Handler) updateMigration(w http.ResponseWriter, r *http.Request) {
 		SQLContent:         body.SQLContent,
 		SQLDown:            body.SQLDown,
 		IrreversibleReason: body.IrreversibleReason,
+		ExecutionMode:      body.ExecutionMode,
+		BatchByAttribute:   body.BatchByAttribute,
+		BatchSize:          body.BatchSize,
 	})
 	if err != nil {
 		writeMigrationError(w, err)
@@ -124,12 +136,22 @@ func (h *Handler) updateMigration(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) executeMigration(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
 	principal, ok := h.migrationPrincipal(w, r)
 	if !ok {
 		return
 	}
 	migrationID, ok := parseMigrationID(w, r)
 	if !ok {
+		return
+	}
+	if h.migrations.AsyncEnabled() {
+		enqueued, err := h.migrations.EnqueueExecute(r.Context(), principal, r.PathValue("id"), migrationID)
+		if err != nil {
+			writeMigrationError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusAccepted, enqueued)
 		return
 	}
 	result, err := h.migrations.ExecuteMigration(r.Context(), principal, r.PathValue("id"), migrationID)
@@ -317,14 +339,16 @@ func writeMigrationError(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusUnauthorized, "authentication_required", "authentication is required")
 	case errors.Is(err, migration.ErrForbidden), errors.Is(err, migration.ErrDatabaseMismatch):
 		writeError(w, http.StatusForbidden, "access_denied", "access to this migration is denied")
-	case errors.Is(err, migration.ErrNotFound):
-		writeError(w, http.StatusNotFound, "not_found", "migration not found")
+	case errors.Is(err, migration.ErrNotFound), errors.Is(err, migration.ErrJobNotFound):
+		writeError(w, http.StatusNotFound, "not_found", "migration or job not found")
 	case errors.Is(err, migration.ErrInvalidMigrationRequest):
 		writeError(w, http.StatusBadRequest, "invalid_request", "provide an apply, rollback, or forward operation and a positive revision")
 	case errors.Is(err, migration.ErrNotApproved):
 		writeError(w, http.StatusConflict, "migration_not_approved", "all required group leaders must approve before execution")
 	case errors.Is(err, migration.ErrInvalidJobState):
 		writeError(w, http.StatusConflict, "migration_invalid_job_state", "the current job state does not allow this operation")
+	case errors.Is(err, migration.ErrAsyncUnavailable):
+		writeError(w, http.StatusServiceUnavailable, "async_unavailable", "async job queue is unavailable")
 	case errors.Is(err, migration.ErrMigrationLocked):
 		writeError(w, http.StatusConflict, "migration_locked", "a migration is running or awaiting outcome verification for this connection")
 	case errors.Is(err, migration.ErrOutcomeUnconfirmed):

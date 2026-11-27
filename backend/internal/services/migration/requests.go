@@ -42,10 +42,6 @@ type GroupReview struct {
 	ApprovedAt *time.Time `json:"approved_at,omitempty"`
 }
 
-type EnqueueResult struct {
-	JobID string `json:"job_id"`
-}
-
 type RequestStore interface {
 	CreateMigrationRequest(context.Context, MigrationRequest) (MigrationRequest, error)
 	GetMigrationRequest(ctx context.Context, databaseID string, requestID int64) (MigrationRequest, error)

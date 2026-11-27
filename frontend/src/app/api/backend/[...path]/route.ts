@@ -51,7 +51,7 @@ async function forward(request: Request, context: RouteContext) {
   url.search = new URL(request.url).search;
 
   const headers = new Headers();
-  for (const name of ["content-type", "origin"]) {
+  for (const name of ["content-type", "origin", "sec-fetch-site"]) {
     const value = request.headers.get(name);
     if (value) headers.set(name, value);
   }

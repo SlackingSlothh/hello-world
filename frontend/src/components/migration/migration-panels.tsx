@@ -2,7 +2,14 @@
 
 import { useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
-import { Check, CircleX, Copy, Pencil, Play } from "lucide-react";
+import {
+  Check,
+  CircleX,
+  Copy,
+  Pencil,
+  Play,
+  RotateCcw,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -13,7 +20,11 @@ import {
 import { ErrorState } from "@/components/shared/async-states";
 import { PaginationControls } from "@/components/shared/pagination-controls";
 import { StatusBadge } from "@/components/shared/status-badge";
-import type { MigrationHistoryEntry, MigrationRequest } from "@/lib/api/migrations";
+import type {
+  MigrationHistoryEntry,
+  MigrationJob,
+  MigrationRequest,
+} from "@/lib/api/migrations";
 import { visibleMigrationHistory } from "@/lib/migration-history";
 
 const dateTimeFormatter = new Intl.DateTimeFormat("en-US", {
@@ -26,7 +37,11 @@ function formatDateTime(value: string) {
   return dateTimeFormatter.format(new Date(value));
 }
 
-export function MigrationHistory({ records }: { records: MigrationHistoryEntry[] }) {
+export function MigrationHistory({
+  records,
+}: {
+  records: MigrationHistoryEntry[];
+}) {
   const [hideRollbacks, setHideRollbacks] = useState(false);
   const visibleRecords = visibleMigrationHistory(records, hideRollbacks);
   const columns: DataTableColumn<MigrationHistoryEntry>[] = [
@@ -36,7 +51,9 @@ export function MigrationHistory({ records }: { records: MigrationHistoryEntry[]
       cell: (item) => (
         <div>
           <span className="font-mono">#{item.id}</span>
-          <div className="text-xs text-muted-foreground">Attempt {item.attempt_number}</div>
+          <div className="text-xs text-muted-foreground">
+            Attempt {item.attempt_number}
+          </div>
         </div>
       ),
     },
@@ -47,7 +64,9 @@ export function MigrationHistory({ records }: { records: MigrationHistoryEntry[]
         <div>
           <span className="font-medium">{item.title}</span>
           <div className="text-xs text-muted-foreground">
-            #{item.migration_id} · {item.version !== undefined ? `v${item.version} · ` : ""}Revision {item.revision}
+            #{item.migration_id} ·{" "}
+            {item.version !== undefined ? `v${item.version} · ` : ""}Revision{" "}
+            {item.revision}
           </div>
         </div>
       ),
@@ -59,7 +78,9 @@ export function MigrationHistory({ records }: { records: MigrationHistoryEntry[]
         <div>
           {item.operation}
           {item.rollback_target_run_id && (
-            <div className="text-xs text-muted-foreground">Target #{item.rollback_target_run_id}</div>
+            <div className="text-xs text-muted-foreground">
+              Target #{item.rollback_target_run_id}
+            </div>
           )}
         </div>
       ),
@@ -100,7 +121,9 @@ export function MigrationHistory({ records }: { records: MigrationHistoryEntry[]
           </p>
           <details>
             <summary className="cursor-pointer underline">
-              {item.sql_dispatch_started === false ? "View planned SQL" : "View SQL snapshot"}
+              {item.sql_dispatch_started === false
+                ? "View planned SQL"
+                : "View SQL snapshot"}
             </summary>
             <pre className="mt-2 max-h-52 w-64 max-w-[70vw] overflow-auto whitespace-pre-wrap break-all rounded bg-muted p-2 text-xs">
               {item.sql_snapshot}
@@ -244,29 +267,29 @@ export function DraftEditor({
   allowBatch = true,
   onSave,
 }: {
-  initialValue?: {
-    [K in keyof DraftFormValues]: DraftFormValues[K];
-  };
+  initialValue?: Partial<DraftFormValues>;
   busy?: boolean;
   allowBatch?: boolean;
   onSave: (value: DraftFormValues) => void | Promise<void>;
 }) {
-  const [value, setValue] = useState({
+  const [value, setValue] = useState<DraftFormValues>({
     name: "",
     description: "",
     upSql: "",
     downSql: "",
     irreversible: false,
     irreversibleReason: "",
-    mode: "single" as const,
+    mode: "single",
     batchSize: 1000,
-    cursorColumn: "",
+    cursorColumn: "id",
     ...initialValue,
   });
-  const update = <K extends keyof typeof value>(
+  const update = <K extends keyof DraftFormValues>(
     key: K,
-    next: (typeof value)[K],
+    next: DraftFormValues[K],
   ) => setValue((current) => ({ ...current, [key]: next }));
+
+  const cursorName = value.cursorColumn.trim() || "id";
 
   return (
     <form
@@ -287,42 +310,7 @@ export function DraftEditor({
         value={value.description}
         onChange={(next) => update("description", next)}
       />
-      <label className="block space-y-2 text-sm font-medium">
-        Up SQL
-        <Textarea
-          className="min-h-40 resize-y font-mono"
-          onChange={(event) => update("upSql", event.target.value)}
-          required
-          value={value.upSql}
-        />
-      </label>
-      <label className="block space-y-2 text-sm font-medium">
-        Down SQL
-        <Textarea
-          className="min-h-32 resize-y font-mono"
-          disabled={value.irreversible}
-          onChange={(event) => update("downSql", event.target.value)}
-          required={!value.irreversible}
-          value={value.downSql}
-        />
-      </label>
-      <label className="flex items-center gap-2 text-sm">
-        <input
-          checked={value.irreversible}
-          onChange={(event) => update("irreversible", event.target.checked)}
-          type="checkbox"
-        />
-        This migration is irreversible
-      </label>
-      {value.irreversible && (
-        <Field
-          label="Why can’t this migration be reversed?"
-          onChange={(next) => update("irreversibleReason", next)}
-          required
-          value={value.irreversibleReason}
-        />
-      )}
-      {allowBatch && (
+      {allowBatch ? (
         <label className="block space-y-2 text-sm font-medium">
           Execution mode
           <select
@@ -332,26 +320,86 @@ export function DraftEditor({
             }
             value={value.mode}
           >
-            <option value="single">Single transaction</option>
-            <option value="batch">Batch</option>
+            <option value="single">Normal (single transaction)</option>
+            <option value="batch">Batch (cursor chunked with checkpoints)</option>
           </select>
         </label>
-      )}
+      ) : null}
       {allowBatch && value.mode === "batch" ? (
-        <div className="grid gap-4 sm:grid-cols-2">
-          <NumberField
-            label="Batch size"
-            value={value.batchSize}
-            onChange={(next) => update("batchSize", next)}
-          />
-          <Field
-            label="Cursor column"
-            value={value.cursorColumn}
-            onChange={(next) => update("cursorColumn", next)}
-            required
-          />
+        <div className="space-y-3 rounded-lg border bg-muted/30 p-3">
+          <div className="grid gap-4 sm:grid-cols-2">
+            <NumberField
+              label="Batch size (rows per transaction)"
+              value={value.batchSize}
+              onChange={(next) => update("batchSize", next)}
+            />
+            <Field
+              label="Cursor attribute (batch_by_attribute)"
+              value={value.cursorColumn}
+              onChange={(next) => update("cursorColumn", next)}
+              required
+            />
+          </div>
+          <div className="space-y-1 text-xs text-muted-foreground">
+            <p className="font-medium text-foreground">
+              Batch SQL parameter contract
+            </p>
+            <p>
+              Use <code className="font-mono">$1</code> (last committed cursor),{" "}
+              <code className="font-mono">$2</code> (target scope max), and{" "}
+              <code className="font-mono">$3</code> (batch size) in Up SQL, and{" "}
+              <code className="font-mono">$1</code> (cursor start) /{" "}
+              <code className="font-mono">$2</code> (cursor end) in Down SQL.
+            </p>
+            <pre className="overflow-auto rounded bg-muted p-2 font-mono text-[11px] text-foreground">
+              {`WITH batch AS (\n  SELECT ${cursorName} FROM target_table\n  WHERE ${cursorName} > $1 AND ${cursorName} <= $2\n  ORDER BY ${cursorName} LIMIT $3\n)\nUPDATE target_table SET status = 'migrated'\nWHERE ${cursorName} IN (SELECT ${cursorName} FROM batch);`}
+            </pre>
+          </div>
         </div>
       ) : null}
+      <label className="block space-y-2 text-sm font-medium">
+        Up SQL
+        <Textarea
+          className="min-h-40 resize-y font-mono"
+          onChange={(event) => update("upSql", event.target.value)}
+          required
+          value={value.upSql}
+        />
+      </label>
+      <label className="flex items-center gap-2 text-sm">
+        <input
+          checked={value.irreversible}
+          onChange={(event) => {
+            const checked = event.target.checked;
+            setValue((current) => ({
+              ...current,
+              irreversible: checked,
+              downSql: checked ? "" : current.downSql,
+              irreversibleReason: checked ? current.irreversibleReason : "",
+            }));
+          }}
+          type="checkbox"
+        />
+        This migration is irreversible
+      </label>
+      {value.irreversible ? (
+        <Field
+          label="Why can’t this migration be reversed?"
+          value={value.irreversibleReason}
+          onChange={(next) => update("irreversibleReason", next)}
+          required
+        />
+      ) : (
+        <label className="block space-y-2 text-sm font-medium">
+          Down SQL
+          <Textarea
+            className="min-h-32 resize-y font-mono"
+            onChange={(event) => update("downSql", event.target.value)}
+            required
+            value={value.downSql}
+          />
+        </label>
+      )}
       <Button disabled={busy} type="submit">
         {busy ? "Saving…" : "Save draft"}
       </Button>
@@ -440,18 +488,22 @@ export function RequestReview({
                 {approval.group_name} · {approval.leader_id ?? "No active leader"}
               </span>
               <div className="flex items-center gap-2">
-                <StatusBadge status={approval.approved_at ? "approved" : "pending"} />
-                {request.status === "PENDING_REVIEW" && approval.leader_id === request.viewer_id && !approval.approved_at && (
-                  <Button
-                    aria-label={`Approve for ${approval.group_name}`}
-                    disabled={busy}
-                    onClick={() => onApprove(approval.group_id)}
-                    size="sm"
-                    variant="outline"
-                  >
-                    <Check aria-hidden="true" /> Approve
-                  </Button>
-                )}
+                <StatusBadge
+                  status={approval.approved_at ? "approved" : "pending"}
+                />
+                {request.status === "PENDING_REVIEW" &&
+                  approval.leader_id === request.viewer_id &&
+                  !approval.approved_at && (
+                    <Button
+                      aria-label={`Approve for ${approval.group_name}`}
+                      disabled={busy}
+                      onClick={() => onApprove(approval.group_id)}
+                      size="sm"
+                      variant="outline"
+                    >
+                      <Check aria-hidden="true" /> Approve
+                    </Button>
+                  )}
               </div>
             </li>
           ))}
@@ -464,28 +516,77 @@ export function RequestReview({
 export type JobSummary = {
   id: string;
   status: string;
+  action?: string;
+  mode?: string;
+  migrationId?: number;
+  executionId?: string;
+  actorUsername?: string;
+  enqueuedAt?: string;
   startedAt?: string;
+  finishedAt?: string;
   batchesCommitted?: number;
   batchesTotal?: number;
   rowsCommitted?: number;
   currentCursor?: string;
+  targetScopeMax?: string;
+  attempt?: number;
+  maxRetries?: number;
+  sqlState?: string;
   lastError?: string;
 };
 
+export function toJobSummary(job: MigrationJob): JobSummary {
+  return {
+    id: job.job_id,
+    status: job.status,
+    action: job.action,
+    mode: job.mode,
+    migrationId: job.migration_id,
+    executionId: job.execution_id,
+    actorUsername: job.actor_username,
+    enqueuedAt: job.enqueued_at,
+    startedAt: job.started_at ?? undefined,
+    finishedAt: job.finished_at ?? undefined,
+    batchesCommitted: job.last_committed_batch,
+    rowsCommitted: job.committed_rows,
+    currentCursor: job.last_committed_cursor ?? undefined,
+    targetScopeMax: job.target_scope_max ?? undefined,
+    attempt: job.attempt,
+    maxRetries: job.max_retries,
+    sqlState: job.sqlstate ?? undefined,
+    lastError: job.error_message ?? undefined,
+  };
+}
+
 const terminalStatuses = new Set([
+  "success",
   "succeeded",
   "reverted",
   "failed",
+  "partial",
+  "partially_reverted",
   "stale",
   "cancelled",
 ]);
 
+export function canRecoverPartialJob(status: string): boolean {
+  return status === "partial" || status === "partially_reverted";
+}
+
 export function JobProgress({
   initialJob,
   fetchJob,
+  onTerminal,
+  onResume,
+  onRevert,
+  actionBusy = false,
 }: {
   initialJob: JobSummary;
   fetchJob: (jobId: string) => Promise<JobSummary>;
+  onTerminal?: (job: JobSummary) => void;
+  onResume?: (job: JobSummary) => void;
+  onRevert?: (job: JobSummary) => void;
+  actionBusy?: boolean;
 }) {
   const [job, setJob] = useState(initialJob);
   const [error, setError] = useState<string>();
@@ -493,8 +594,14 @@ export function JobProgress({
   const inFlight = useRef(false);
   const stopped = useRef(false);
   const failures = useRef(0);
+  const onTerminalRef = useRef(onTerminal);
 
   useEffect(() => {
+    onTerminalRef.current = onTerminal;
+  }, [onTerminal]);
+
+  useEffect(() => {
+    failures.current = 0;
     stopped.current = terminalStatuses.has(initialJob.status);
     let disposed = false;
 
@@ -523,6 +630,7 @@ export function JobProgress({
         if (terminalStatuses.has(nextJob.status)) {
           stopped.current = true;
           clearTimer();
+          onTerminalRef.current?.(nextJob);
           return;
         }
         schedule(2000);
@@ -554,31 +662,98 @@ export function JobProgress({
     };
   }, [fetchJob, initialJob.id, initialJob.status]);
 
+  const recoverable = canRecoverPartialJob(job.status);
+
   return (
     <section
       aria-live="polite"
       className="space-y-4 rounded-lg border bg-background p-4"
     >
-      <header className="flex flex-wrap items-center justify-between gap-2">
-        <div>
-          <h2 className="font-semibold">Job {job.id}</h2>
+      <header className="flex flex-wrap items-start justify-between gap-2">
+        <div className="min-w-0 space-y-1">
+          <h2 className="break-all font-mono text-sm font-semibold">
+            Job {job.id}
+          </h2>
+          <p className="text-xs text-muted-foreground">
+            {job.action ? `${job.action.replaceAll("_", " ")} · ` : ""}
+            {job.mode ? `${job.mode} mode · ` : ""}
+            {job.migrationId !== undefined ? `Migration #${job.migrationId}` : ""}
+            {job.actorUsername ? ` · by ${job.actorUsername}` : ""}
+          </p>
+          {job.executionId ? (
+            <p className="break-all font-mono text-xs text-muted-foreground">
+              Execution {job.executionId}
+            </p>
+          ) : null}
           {job.startedAt ? (
-            <p className="text-sm text-muted-foreground">
+            <p className="text-xs text-muted-foreground">
               Started {formatDateTime(job.startedAt)}
+              {job.finishedAt ? ` · Finished ${formatDateTime(job.finishedAt)}` : ""}
+            </p>
+          ) : job.enqueuedAt ? (
+            <p className="text-xs text-muted-foreground">
+              Enqueued {formatDateTime(job.enqueuedAt)}
             </p>
           ) : null}
         </div>
         <StatusBadge status={job.status} />
       </header>
-      <dl className="grid gap-3 text-sm sm:grid-cols-2">
+      <dl className="grid gap-3 text-sm sm:grid-cols-2 lg:grid-cols-4">
         <JobMetric label="Batches committed">
           {job.batchesCommitted ?? "—"}
           {job.batchesTotal === undefined ? "" : ` / ${job.batchesTotal}`}
         </JobMetric>
         <JobMetric label="Rows committed">{job.rowsCommitted ?? "—"}</JobMetric>
-        <JobMetric label="Current cursor">{job.currentCursor ?? "—"}</JobMetric>
-        <JobMetric label="Last error">{job.lastError ?? "—"}</JobMetric>
+        <JobMetric label="Current cursor">
+          {job.currentCursor ?? "—"}
+          {job.targetScopeMax ? ` / ${job.targetScopeMax}` : ""}
+        </JobMetric>
+        <JobMetric label="Attempts">
+          {job.attempt !== undefined
+            ? `${job.attempt}${job.maxRetries !== undefined ? ` / ${job.maxRetries}` : ""}`
+            : "—"}
+        </JobMetric>
       </dl>
+      {job.lastError ? (
+        <div className="rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm">
+          <p className="font-medium text-destructive">
+            Last error{job.sqlState ? ` (SQLSTATE ${job.sqlState})` : ""}
+          </p>
+          <p className="mt-1 wrap-break-word text-xs">{job.lastError}</p>
+        </div>
+      ) : null}
+      {recoverable && (onResume || onRevert) ? (
+        <div className="space-y-3 rounded-md border border-destructive/30 bg-muted/40 p-3">
+          <p className="text-xs text-muted-foreground">
+            Partial batch state is holding the database lock. Choose whether to
+            resume from the last committed checkpoint or revert committed
+            batches in reverse order.
+          </p>
+          <div className="flex flex-wrap gap-2">
+            {onResume ? (
+              <Button
+                disabled={actionBusy}
+                onClick={() => onResume(job)}
+                size="sm"
+              >
+                <Play aria-hidden="true" />
+                Resume from checkpoint
+              </Button>
+            ) : null}
+            {onRevert ? (
+              <Button
+                disabled={actionBusy}
+                onClick={() => onRevert(job)}
+                size="sm"
+                variant="destructive"
+              >
+                <RotateCcw aria-hidden="true" />
+                Revert committed batches
+              </Button>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
       {error ? (
         <ErrorState
           message={error}
@@ -612,6 +787,9 @@ export function JobList({
   total,
   onPageChange,
   onSelect,
+  onResume,
+  onRevert,
+  actionBusyJobId,
 }: {
   jobs: JobSummary[];
   page: number;
@@ -619,23 +797,49 @@ export function JobList({
   total: number;
   onPageChange: (page: number) => void;
   onSelect?: (job: JobSummary) => void;
+  onResume?: (job: JobSummary) => void;
+  onRevert?: (job: JobSummary) => void;
+  actionBusyJobId?: string;
 }) {
   const columns: DataTableColumn<JobSummary>[] = [
     {
       id: "id",
       header: "Job",
-      cell: (job) =>
-        onSelect ? (
-          <button
-            className="font-mono text-primary underline"
-            onClick={() => onSelect(job)}
-            type="button"
-          >
-            {job.id}
-          </button>
-        ) : (
-          <span className="font-mono">{job.id}</span>
-        ),
+      cell: (job) => (
+        <div className="min-w-0">
+          {onSelect ? (
+            <button
+              className="break-all text-left font-mono text-xs text-primary underline"
+              onClick={() => onSelect(job)}
+              type="button"
+            >
+              {job.id}
+            </button>
+          ) : (
+            <span className="break-all font-mono text-xs">{job.id}</span>
+          )}
+          {job.migrationId !== undefined ? (
+            <div className="text-xs text-muted-foreground">
+              Migration #{job.migrationId}
+              {job.actorUsername ? ` · ${job.actorUsername}` : ""}
+            </div>
+          ) : null}
+        </div>
+      ),
+    },
+    {
+      id: "action",
+      header: "Operation",
+      cell: (job) => (
+        <div className="text-xs">
+          <div className="font-medium">
+            {job.action ? job.action.replaceAll("_", " ") : "—"}
+          </div>
+          {job.mode ? (
+            <div className="text-muted-foreground">{job.mode}</div>
+          ) : null}
+        </div>
+      ),
     },
     {
       id: "status",
@@ -648,10 +852,51 @@ export function JobList({
       cell: (job) => job.batchesCommitted ?? "—",
     },
     { id: "rows", header: "Rows", cell: (job) => job.rowsCommitted ?? "—" },
+    {
+      id: "actions",
+      header: "Recovery",
+      cell: (job) => {
+        if (!canRecoverPartialJob(job.status) || (!onResume && !onRevert)) {
+          return <span className="text-xs text-muted-foreground">—</span>;
+        }
+        const busy = actionBusyJobId === job.id;
+        return (
+          <div className="flex flex-wrap gap-1">
+            {onResume ? (
+              <Button
+                disabled={busy}
+                onClick={() => onResume(job)}
+                size="sm"
+                variant="outline"
+              >
+                <Play aria-hidden="true" />
+                Resume
+              </Button>
+            ) : null}
+            {onRevert ? (
+              <Button
+                disabled={busy}
+                onClick={() => onRevert(job)}
+                size="sm"
+                variant="destructive"
+              >
+                <RotateCcw aria-hidden="true" />
+                Revert
+              </Button>
+            ) : null}
+          </div>
+        );
+      },
+    },
   ];
   return (
     <div className="space-y-4">
-      <DataTable columns={columns} getRowId={(job) => job.id} rows={jobs} />
+      <DataTable
+        columns={columns}
+        emptyTitle="No migration jobs"
+        getRowId={(job) => job.id}
+        rows={jobs}
+      />
       <PaginationControls
         onPageChange={onPageChange}
         page={page}

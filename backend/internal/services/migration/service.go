@@ -6,10 +6,12 @@ import (
 	"errors"
 	"fmt"
 	"hash/fnv"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
 
+	"hello-world/internal/observability"
 	"hello-world/internal/services/authz"
 )
 
@@ -651,27 +653,51 @@ func SplitSQLStatementsForDialect(sqlText string, dialect TargetDialect) []strin
 	return splitSQLStatementsForDialect(sqlText, dialect)
 }
 
-// layanan utama pengelola logika bisnis migrasi
 type Service struct {
-	authz     Authorizer
-	store     Store
-	connector TargetConnector
-	audit     AuditLogger
-	nowFn     func() time.Time
+	authz      Authorizer
+	store      Store
+	connector  TargetConnector
+	audit      AuditLogger
+	nowFn      func() time.Time
+	jobStore   JobStore
+	lockStore  LockStore
+	approvals  ApprovalChecker
+	metrics    *observability.Metrics
+	maxRetries int
 
 	mu      sync.Mutex
 	dbLocks map[string]bool
 }
 
-// membuat instance service migrasi baru
 func NewService(authz Authorizer, store Store, connector TargetConnector, audit AuditLogger) *Service {
 	return &Service{
-		authz:     authz,
-		store:     store,
-		connector: connector,
-		audit:     audit,
-		nowFn:     func() time.Time { return time.Now().UTC() },
-		dbLocks:   make(map[string]bool),
+		authz:      authz,
+		store:      store,
+		connector:  connector,
+		audit:      audit,
+		nowFn:      func() time.Time { return time.Now().UTC() },
+		approvals:  AllowAllApprovals{},
+		maxRetries: 3,
+		dbLocks:    make(map[string]bool),
+	}
+}
+
+func (s *Service) ConfigureAsync(jobStore JobStore, lockStore LockStore, approvals ApprovalChecker, metrics *observability.Metrics) {
+	s.jobStore = jobStore
+	s.lockStore = lockStore
+	if approvals != nil {
+		s.approvals = approvals
+	}
+	s.metrics = metrics
+}
+
+func (s *Service) AsyncEnabled() bool {
+	return s.jobStore != nil
+}
+
+func (s *Service) SetMaxRetries(maxRetries int) {
+	if maxRetries >= 0 {
+		s.maxRetries = maxRetries
 	}
 }
 
@@ -682,6 +708,8 @@ func (s *Service) SetClock(nowFn func() time.Time) {
 	}
 }
 
+var batchAttrPattern = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_$]*$`)
+
 type CreateDraftInput struct {
 	DatabaseID         string
 	Title              string
@@ -689,6 +717,32 @@ type CreateDraftInput struct {
 	SQLContent         string
 	SQLDown            string
 	IrreversibleReason string
+	ExecutionMode      ExecutionMode
+	BatchByAttribute   string
+	BatchSize          *int
+}
+
+func normalizeBatchConfig(mode ExecutionMode, cursorCol string, batchSize *int) (ExecutionMode, string, *int, error) {
+	normalizedMode := ExecutionMode(strings.ToLower(strings.TrimSpace(string(mode))))
+	if normalizedMode == "" {
+		normalizedMode = ModeNormal
+	}
+	switch normalizedMode {
+	case ModeNormal:
+		return ModeNormal, "", nil, nil
+	case ModeBatch:
+		col := strings.TrimSpace(cursorCol)
+		if !batchAttrPattern.MatchString(col) {
+			return "", "", nil, fmt.Errorf("%w: batch_by_attribute must be a valid column identifier", ErrInvalidDefinition)
+		}
+		if batchSize == nil || *batchSize <= 0 {
+			return "", "", nil, fmt.Errorf("%w: batch_size must be a positive integer", ErrInvalidDefinition)
+		}
+		size := *batchSize
+		return ModeBatch, col, &size, nil
+	default:
+		return "", "", nil, fmt.Errorf("%w: execution_mode must be normal or batch", ErrInvalidDefinition)
+	}
 }
 
 func validateDefinition(sqlUp, sqlDown, irreversibleReason string) error {
@@ -706,7 +760,6 @@ func validateDefinition(sqlUp, sqlDown, irreversibleReason string) error {
 	return nil
 }
 
-// membuat dan menyimpan rancangan migrasi baru dengan status draft
 func (s *Service) CreateDraft(ctx context.Context, principal Principal, in CreateDraftInput) (*Migration, error) {
 	if err := s.authorize(ctx, principal, in.DatabaseID, ActionCreateMigration); err != nil {
 		return nil, err
@@ -719,6 +772,10 @@ func (s *Service) CreateDraft(ctx context.Context, principal Principal, in Creat
 	if err := validateDefinition(in.SQLContent, in.SQLDown, in.IrreversibleReason); err != nil {
 		return nil, err
 	}
+	mode, batchAttr, batchSize, err := normalizeBatchConfig(in.ExecutionMode, in.BatchByAttribute, in.BatchSize)
+	if err != nil {
+		return nil, err
+	}
 
 	now := s.nowFn()
 	m := &Migration{
@@ -728,6 +785,9 @@ func (s *Service) CreateDraft(ctx context.Context, principal Principal, in Creat
 		SQLContent:         strings.TrimSpace(in.SQLContent),
 		SQLDown:            strings.TrimSpace(in.SQLDown),
 		IrreversibleReason: strings.TrimSpace(in.IrreversibleReason),
+		ExecutionMode:      mode,
+		BatchByAttribute:   batchAttr,
+		BatchSize:          batchSize,
 		Revision:           1,
 		Status:             StatusDraft,
 		CreatedBy:          principal.UserID,
@@ -761,9 +821,11 @@ type UpdateDraftInput struct {
 	SQLContent         string
 	SQLDown            string
 	IrreversibleReason string
+	ExecutionMode      ExecutionMode
+	BatchByAttribute   string
+	BatchSize          *int
 }
 
-// UpdateDraft changes a draft before its first execution attempt.
 func (s *Service) UpdateDraft(ctx context.Context, principal Principal, in UpdateDraftInput) (*Migration, error) {
 	if err := s.authorize(ctx, principal, in.DatabaseID, ActionUpdateMigration); err != nil {
 		return nil, err
@@ -787,6 +849,10 @@ func (s *Service) UpdateDraft(ctx context.Context, principal Principal, in Updat
 	if err := validateDefinition(in.SQLContent, in.SQLDown, in.IrreversibleReason); err != nil {
 		return nil, err
 	}
+	mode, batchAttr, batchSize, err := normalizeBatchConfig(in.ExecutionMode, in.BatchByAttribute, in.BatchSize)
+	if err != nil {
+		return nil, err
+	}
 
 	now := s.nowFn()
 	existing.Title = title
@@ -794,6 +860,9 @@ func (s *Service) UpdateDraft(ctx context.Context, principal Principal, in Updat
 	existing.SQLContent = strings.TrimSpace(in.SQLContent)
 	existing.SQLDown = strings.TrimSpace(in.SQLDown)
 	existing.IrreversibleReason = strings.TrimSpace(in.IrreversibleReason)
+	existing.ExecutionMode = mode
+	existing.BatchByAttribute = batchAttr
+	existing.BatchSize = batchSize
 	existing.UpdatedBy = principal.UserID
 	existing.UpdatedAt = now
 	if err := s.store.UpdateDraftSQL(ctx, existing); err != nil {
@@ -867,7 +936,11 @@ func (s *Service) ForwardMigration(ctx context.Context, principal Principal, dat
 	return s.execute(ctx, principal, databaseID, migrationID, RunForward)
 }
 
-func (s *Service) execute(ctx context.Context, principal Principal, databaseID string, migrationID int64, operation RunOperation) (_ *ExecuteResult, outcomeErr error) {
+func (s *Service) execute(ctx context.Context, principal Principal, databaseID string, migrationID int64, operation RunOperation) (*ExecuteResult, error) {
+	return s.executeWithJob(ctx, principal, databaseID, migrationID, operation, nil, nil)
+}
+
+func (s *Service) executeWithJob(ctx context.Context, principal Principal, databaseID string, migrationID int64, operation RunOperation, jobID, executionUUID *string) (_ *ExecuteResult, outcomeErr error) {
 	if err := s.authorize(ctx, principal, databaseID, ActionExecuteMigration); err != nil {
 		return nil, err
 	}
@@ -915,16 +988,17 @@ func (s *Service) execute(ctx context.Context, principal Principal, databaseID s
 		}
 	}
 
-	// catat awal percobaan eksekusi di database platform
 	run := &MigrationRun{
-		MigrationID: m.ID,
-		DatabaseID:  databaseID,
-		Revision:    m.Revision,
-		Operation:   operation,
-		SQLSnapshot: sqlContent,
-		Status:      RunStatusRunning,
-		ExecutedBy:  principal.UserID,
-		StartedAt:   startTime,
+		MigrationID:   m.ID,
+		DatabaseID:    databaseID,
+		JobID:         jobID,
+		ExecutionUUID: executionUUID,
+		Revision:      m.Revision,
+		Operation:     operation,
+		SQLSnapshot:   sqlContent,
+		Status:        RunStatusRunning,
+		ExecutedBy:    principal.UserID,
+		StartedAt:     startTime,
 	}
 	if err := s.store.CreateRun(ctx, run); err != nil {
 		return nil, err
