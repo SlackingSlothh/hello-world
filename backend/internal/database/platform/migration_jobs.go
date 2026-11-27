@@ -20,16 +20,23 @@ func NewJobStore(platformDB *sql.DB) *JobStore {
 }
 
 func (s *JobStore) EnqueueJob(ctx context.Context, job *migration.Job) error {
-	traceCtx := job.TraceContext
-	if len(traceCtx) == 0 {
-		traceCtx = []byte("{}")
-	}
 	tx, err := s.platformDB.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
 
+	if err := s.EnqueueJobTx(ctx, tx, job); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func (s *JobStore) EnqueueJobTx(ctx context.Context, tx *sql.Tx, job *migration.Job) error {
+	traceCtx := job.TraceContext
+	if len(traceCtx) == 0 {
+		traceCtx = []byte("{}")
+	}
 	const query = `
 		INSERT INTO migration_jobs (
 			job_id, migration_id, execution_id, parent_execution_id, database_id,
@@ -59,7 +66,7 @@ func (s *JobStore) EnqueueJob(ctx context.Context, job *migration.Job) error {
 		return err
 	}
 	_, _ = tx.ExecContext(ctx, `SELECT pg_notify($1, $2)`, MigrationJobsNotifyChannel, job.JobID)
-	return tx.Commit()
+	return nil
 }
 
 func (s *JobStore) GetJob(ctx context.Context, jobID string) (*migration.Job, error) {

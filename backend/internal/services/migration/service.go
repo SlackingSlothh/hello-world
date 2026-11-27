@@ -124,6 +124,7 @@ type MigrationRun struct {
 	Operation           RunOperation `json:"operation"`
 	RollbackTargetRunID *int64       `json:"rollback_target_run_id,omitempty"`
 	SQLSnapshot         string       `json:"sql_snapshot"`
+	SQLDispatchStarted  *bool        `json:"sql_dispatch_started"`
 	Status              RunStatus    `json:"status"`
 	ExecutedBy          string       `json:"executed_by"`
 	ErrorMessage        *string      `json:"error_message,omitempty"`
@@ -150,6 +151,7 @@ type HistoryEntry struct {
 	RollbackTargetRunID *string      `json:"rollback_target_run_id,omitempty"`
 	Status              RunStatus    `json:"status"`
 	SQLSnapshot         string       `json:"sql_snapshot"`
+	SQLDispatchStarted  *bool        `json:"sql_dispatch_started"`
 	ExecutedBy          string       `json:"executed_by"`
 	Username            string       `json:"username"`
 	StartedAt           time.Time    `json:"started_at"`
@@ -198,6 +200,8 @@ type Store interface {
 	UpdateDraftSQL(ctx context.Context, m *Migration) error
 
 	CreateRun(ctx context.Context, run *MigrationRun) error
+	MarkSQLDispatchStarted(ctx context.Context, runID int64, evidence TransactionEvidence) error
+	GetRunForReconciliation(ctx context.Context, databaseID string, runID int64) (MigrationRun, TransactionEvidence, error)
 	CompleteRunFailed(ctx context.Context, runID, migrationID int64, errMsg string, execMs int64, finishedAt time.Time) error
 	CompleteRunSucceeded(ctx context.Context, runID, migrationID int64, databaseID string, execMs int64, finishedAt time.Time) (assignedVersion int64, err error)
 	ListRunsByMigration(ctx context.Context, migrationID int64) ([]MigrationRun, error)
@@ -945,20 +949,33 @@ func (s *Service) execute(ctx context.Context, principal Principal, databaseID s
 		return s.failRun(ctx, m, run, startTime, errors.Join(fmt.Errorf("gagal mengunci urutan migrasi pada database target: %w", err), rollbackErr))
 	}
 
-	sqlStartedAt := s.nowFn()
-	loggedSQL := ""
-	if s.audit != nil {
-		loggedSQL = redactAuditSQL(run.SQLSnapshot, tx.Dialect())
+	var evidence TransactionEvidence
+	if recorder, ok := tx.(targetTransactionRecorder); ok {
+		evidence, err = recorder.RecordTransactionEvidence(ctx)
+		if err != nil {
+			err = fmt.Errorf("read target transaction evidence: %w", err)
+		}
 	}
-	s.logRun(ctx, m, run, AuditEvent{Action: "migration_sql_started", Status: "RUNNING", SQL: loggedSQL}, sqlStartedAt, nil)
+	if err == nil {
+		err = s.store.MarkSQLDispatchStarted(ctx, run.ID, evidence)
+	}
+	if err != nil {
+		rollbackErr := tx.Rollback(ctx)
+		committed = true
+		s.logTargetRollback(ctx, m, run, rollbackErr)
+		return s.failRun(ctx, m, run, startTime, errors.Join(fmt.Errorf("record SQL dispatch start: %w", err), rollbackErr))
+	}
+	run.SQLDispatchStarted = new(true)
+	sqlStartedAt := s.nowFn()
+	s.logRun(ctx, m, run, AuditEvent{Action: "migration_sql_started", Status: "RUNNING", SQL: run.SQLSnapshot}, sqlStartedAt, nil)
 	if err := tx.ExecSQL(ctx, run.SQLSnapshot); err != nil {
-		s.logRun(ctx, m, run, AuditEvent{Action: "migration_sql_finished", Status: "FAILED", SQL: loggedSQL}, sqlStartedAt, err)
+		s.logRun(ctx, m, run, AuditEvent{Action: "migration_sql_finished", Status: "FAILED", SQL: run.SQLSnapshot}, sqlStartedAt, err)
 		rollbackErr := tx.Rollback(ctx)
 		committed = true
 		s.logTargetRollback(ctx, m, run, rollbackErr)
 		return s.failRun(ctx, m, run, startTime, errors.Join(err, rollbackErr))
 	}
-	s.logRun(ctx, m, run, AuditEvent{Action: "migration_sql_finished", Status: "SUCCEEDED", SQL: loggedSQL}, sqlStartedAt, nil)
+	s.logRun(ctx, m, run, AuditEvent{Action: "migration_sql_finished", Status: "SUCCEEDED", SQL: run.SQLSnapshot}, sqlStartedAt, nil)
 
 	// simpan perubahan secara permanen di database target
 	if err := tx.Commit(ctx); err != nil {
@@ -1389,7 +1406,7 @@ func (s *Service) authorize(ctx context.Context, principal Principal, databaseID
 	if strings.TrimSpace(principal.UserID) == "" {
 		return ErrUnauthorized
 	}
-	if strings.TrimSpace(databaseID) == "" {
+	if strings.TrimSpace(databaseID) == "" && action != authz.ManageConnections {
 		return ErrForbidden
 	}
 	if s.authz == nil {

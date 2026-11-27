@@ -118,9 +118,33 @@ func (s *routeMigrationStore) CreateRun(_ context.Context, run *migration.Migrat
 	run.ID = s.nextRunID
 	s.nextRunID++
 	run.AttemptNumber = len(s.runs[run.MigrationID]) + 1
+	run.SQLDispatchStarted = new(false)
 	s.migrations[run.MigrationID].FrozenAt = &run.StartedAt
 	s.runs[run.MigrationID] = append(s.runs[run.MigrationID], *run)
 	return nil
+}
+
+func (s *routeMigrationStore) MarkSQLDispatchStarted(_ context.Context, runID int64, _ migration.TransactionEvidence) error {
+	for _, runs := range s.runs {
+		for i := range runs {
+			if runs[i].ID == runID {
+				runs[i].SQLDispatchStarted = new(true)
+				return nil
+			}
+		}
+	}
+	return migration.ErrNotFound
+}
+
+func (s *routeMigrationStore) GetRunForReconciliation(_ context.Context, databaseID string, runID int64) (migration.MigrationRun, migration.TransactionEvidence, error) {
+	for _, runs := range s.runs {
+		for _, run := range runs {
+			if run.ID == runID && run.DatabaseID == databaseID {
+				return run, migration.TransactionEvidence{}, nil
+			}
+		}
+	}
+	return migration.MigrationRun{}, migration.TransactionEvidence{}, migration.ErrNotFound
 }
 
 func (s *routeMigrationStore) CompleteRunFailed(_ context.Context, _ int64, migrationID int64, _ string, _ int64, finishedAt time.Time) error {
@@ -245,6 +269,9 @@ func TestMigrationRoutes_EndToEndFlow(t *testing.T) {
 	if executeResponse.Code != http.StatusOK {
 		t.Fatalf("execute migration: got %d: %s", executeResponse.Code, executeResponse.Body.String())
 	}
+	if !strings.Contains(executeResponse.Body.String(), `"sql_dispatch_started":true`) {
+		t.Fatalf("execution should expose the SQL dispatch phase: %s", executeResponse.Body.String())
+	}
 
 	listResponse := httptest.NewRecorder()
 	api.ServeHTTP(listResponse, httptest.NewRequest(http.MethodGet, "/api/v1/connections/connection-1/migrations", nil))
@@ -285,6 +312,47 @@ func TestMigrationRoutes_ViewOnlyCannotMutate(t *testing.T) {
 	api.ServeHTTP(forbidden, httptest.NewRequest(http.MethodGet, "/api/v1/connections/another-db/migrations/history", nil))
 	if forbidden.Code != http.StatusForbidden {
 		t.Fatalf("history from another connection should be forbidden: %d", forbidden.Code)
+	}
+}
+
+func TestMigrationRunReconciliationRoute(t *testing.T) {
+	store := newRouteMigrationStore()
+	store.runs[2] = []migration.MigrationRun{
+		{ID: 42, DatabaseID: "connection-1", Status: migration.RunStatusSucceeded, SQLSnapshot: "private SQL"},
+		{ID: 43, DatabaseID: "connection-1", Status: migration.RunStatusRunning},
+	}
+	const prefix = "/api/v1/admin/connections/"
+	for _, tc := range []struct {
+		name   string
+		userID string
+		admin  bool
+		path   string
+		status int
+	}{
+		{"unauthenticated", "", false, "connection-1/migration-runs/42/reconcile", http.StatusUnauthorized},
+		{"database editor", "user", false, "connection-1/migration-runs/42/reconcile", http.StatusForbidden},
+		{"admin", "admin", true, "connection-1/migration-runs/42/reconcile", http.StatusOK},
+		{"unknown evidence", "admin", true, "connection-1/migration-runs/43/reconcile", http.StatusConflict},
+		{"wrong connection", "admin", true, "other/migration-runs/42/reconcile", http.StatusNotFound},
+		{"invalid ID", "admin", true, "connection-1/migration-runs/0/reconcile", http.StatusBadRequest},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			access := authz.UserAccess{
+				UserID: tc.userID, Active: true, IsPlatformAdmin: tc.admin,
+				GroupIDs: []string{"editors"},
+				Grants:   []authz.GroupGrant{{GroupID: "editors", DatabaseID: "connection-1", Level: authz.ViewEdit}},
+			}
+			service := migration.NewService(migration.AccessAuthorizer{Reader: migrationAccessReader{access: access}}, store, routeTargetConnector{}, nil)
+			api := handler.New(connectionappServiceForTest(), catalogapp.Service{}, accessapp.Service{}, migrationRouteSecurity{access: access}, service)
+			response := httptest.NewRecorder()
+			api.ServeHTTP(response, httptest.NewRequest(http.MethodPost, prefix+tc.path, nil))
+			if response.Code != tc.status {
+				t.Fatalf("got %d, want %d: %s", response.Code, tc.status, response.Body.String())
+			}
+			if tc.status == http.StatusOK && strings.TrimSpace(response.Body.String()) != `{"execution_id":"42","status":"SUCCEEDED"}` {
+				t.Fatalf("reconciliation should return only the execution ID and status: %s", response.Body.String())
+			}
+		})
 	}
 }
 

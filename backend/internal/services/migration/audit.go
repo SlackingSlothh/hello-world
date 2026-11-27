@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"log/slog"
-	"regexp"
 	"strings"
 	"time"
 
@@ -58,7 +57,11 @@ func (l SlogAuditLogger) Log(ctx context.Context, event AuditEvent) {
 		attrs = append(attrs, slog.Int64("version", *event.Version))
 	}
 	if event.SQL != "" {
-		attrs = append(attrs, slog.String("query", observability.RedactSQL(event.SQL)))
+		redactedSQL := observability.RedactSQL(event.SQL)
+		attrs = append(attrs,
+			slog.String("query", redactedSQL),
+			slog.String("sql", redactedSQL),
+		)
 	}
 	if len(event.Parameters) > 0 {
 		attrs = append(attrs, slog.Any("parameters", observability.RedactParams(event.Parameters)))
@@ -84,25 +87,6 @@ func (l SlogAuditLogger) Log(ctx context.Context, event AuditEvent) {
 		level = slog.LevelWarn
 	}
 	l.Logger.LogAttrs(ctx, level, event.Action, attrs...)
-}
-
-var auditSQLToken = regexp.MustCompile(`(?i)[a-z_][a-z0-9_$]*|[0-9][a-z0-9_.$]*|[^[:space:]]`)
-
-func redactAuditSQL(query string, dialect TargetDialect) string {
-	text := stripSQLCommentsAndStringsForDialect(query, dialect)
-	return auditSQLToken.ReplaceAllStringFunc(text, func(token string) string {
-		upper := strings.ToUpper(token)
-		switch upper {
-		case "SELECT", "INSERT", "UPDATE", "DELETE", "REPLACE", "WITH", "CREATE", "ALTER", "DROP", "TRUNCATE",
-			"TABLE", "INDEX", "VIEW", "COLUMN", "TYPE", "SEQUENCE", "SCHEMA", "ADD", "RENAME", "CONSTRAINT",
-			"INTO", "VALUES", "SET", "FROM", "WHERE", "JOIN", "ON", "AND", "OR", "NOT", "AS", "TO",
-			"IS", "NULL", "DEFAULT", "PRIMARY", "KEY", "FOREIGN", "REFERENCES", "UNIQUE", "RETURNING", "IF", "EXISTS",
-			"(", ")", ",", ";", ".", "=", "<", ">", "+", "-", "*", "/", "%":
-			return upper
-		default:
-			return "?"
-		}
-	})
 }
 
 func (s *Service) logRun(ctx context.Context, m *Migration, run *MigrationRun, event AuditEvent, since time.Time, cause error) {
