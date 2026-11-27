@@ -682,6 +682,36 @@ paths:
                 $ref: "#/components/schemas/Error"
         "500":
           $ref: "#/components/responses/OperationFailed"
+  /api/v1/connections/{id}/migrations/history:
+    parameters:
+      - $ref: "#/components/parameters/ConnectionID"
+    get:
+      tags: [Migrations]
+      operationId: listMigrationHistory
+      summary: List all migration attempts for a connection
+      description: Returns attempts in descending execution ID order, including failed and unfinished attempts.
+      x-required-permission: ReadMigration
+      responses:
+        "200":
+          description: Migration attempts for this connection.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [database_id, runs]
+                properties:
+                  database_id:
+                    type: string
+                  runs:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/MigrationHistoryEntry"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "500":
+          $ref: "#/components/responses/OperationFailed"
   /api/v1/connections/{id}/migrations/{migrationID}:
     parameters:
       - $ref: "#/components/parameters/ConnectionID"
@@ -1624,6 +1654,52 @@ components:
         finished_at:
           type: [string, "null"]
           format: date-time
+    MigrationHistoryEntry:
+      type: object
+      required: [id, migration_id, title, reversible, attempt_number, revision, operation, status, sql_snapshot, executed_by, username, started_at, execution_ms]
+      properties:
+        id:
+          type: string
+          description: Execution ID, encoded as decimal text to preserve its full precision.
+        migration_id:
+          type: string
+        title:
+          type: string
+        reversible:
+          type: boolean
+        version:
+          type: integer
+          format: int64
+          description: The version assigned by a successful apply or used by a rollback or forward attempt.
+        attempt_number:
+          type: integer
+        revision:
+          type: integer
+          format: int64
+        operation:
+          type: string
+          enum: [APPLY, ROLLBACK, FORWARD]
+        rollback_target_run_id:
+          type: string
+          description: Execution targeted by the rollback as decimal text. Only a successful rollback reverts it.
+        status:
+          type: string
+          enum: [RUNNING, SUCCEEDED, FAILED]
+        sql_snapshot:
+          type: string
+        executed_by:
+          type: string
+        username:
+          type: string
+        started_at:
+          type: string
+          format: date-time
+        finished_at:
+          type: string
+          format: date-time
+        execution_ms:
+          type: integer
+          format: int64
     MigrationDetail:
       type: object
       required: [migration, runs]

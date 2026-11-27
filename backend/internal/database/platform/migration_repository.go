@@ -390,3 +390,33 @@ func (ps *PostgresStore) ListRunsByMigration(ctx context.Context, migrationID in
 	}
 	return runs, rows.Err()
 }
+
+func (ps *PostgresStore) ListMigrationHistory(ctx context.Context, databaseID string) ([]migration.HistoryEntry, error) {
+	rows, err := ps.platformDB.QueryContext(ctx, `
+		SELECT r.id, r.migration_id, m.title, m.sql_down <> '',
+		       CASE WHEN r.operation <> 'APPLY' OR r.status = 'SUCCEEDED' THEN m.version END,
+		       r.attempt_number, r.revision, r.operation, r.rollback_target_run_id, r.status,
+		       r.sql_snapshot, r.executed_by, u.username, r.started_at, r.finished_at, r.execution_ms
+		FROM migration_runs r
+		JOIN migrations m ON m.id = r.migration_id
+		JOIN platform_users u ON u.id = r.executed_by
+		WHERE r.database_id = $1
+		ORDER BY r.id DESC`, databaseID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	history := make([]migration.HistoryEntry, 0)
+	for rows.Next() {
+		var entry migration.HistoryEntry
+		if err := rows.Scan(&entry.ID, &entry.MigrationID, &entry.Title, &entry.Reversible, &entry.Version,
+			&entry.AttemptNumber, &entry.Revision, &entry.Operation, &entry.RollbackTargetRunID,
+			&entry.Status, &entry.SQLSnapshot, &entry.ExecutedBy, &entry.Username,
+			&entry.StartedAt, &entry.FinishedAt, &entry.ExecutionMs); err != nil {
+			return nil, err
+		}
+		history = append(history, entry)
+	}
+	return history, rows.Err()
+}

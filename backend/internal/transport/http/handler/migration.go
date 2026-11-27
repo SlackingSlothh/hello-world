@@ -23,6 +23,21 @@ func (h *Handler) listMigrations(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"database_id": databaseID, "migrations": items})
 }
 
+func (h *Handler) listMigrationHistory(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	principal, ok := h.migrationPrincipal(w, r)
+	if !ok {
+		return
+	}
+	databaseID := r.PathValue("id")
+	history, err := h.migrations.ListMigrationHistory(r.Context(), principal, databaseID)
+	if err != nil {
+		writeMigrationError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"database_id": databaseID, "runs": history})
+}
+
 func (h *Handler) getMigration(w http.ResponseWriter, r *http.Request) {
 	principal, ok := h.migrationPrincipal(w, r)
 	if !ok {

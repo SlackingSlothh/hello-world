@@ -133,6 +133,25 @@ type MigrationDetail struct {
 	Runs      []MigrationRun `json:"runs"`
 }
 
+type HistoryEntry struct {
+	ID                  string       `json:"id"`
+	MigrationID         string       `json:"migration_id"`
+	Title               string       `json:"title"`
+	Reversible          bool         `json:"reversible"`
+	Version             *int64       `json:"version,omitempty"`
+	AttemptNumber       int          `json:"attempt_number"`
+	Revision            int64        `json:"revision"`
+	Operation           RunOperation `json:"operation"`
+	RollbackTargetRunID *string      `json:"rollback_target_run_id,omitempty"`
+	Status              RunStatus    `json:"status"`
+	SQLSnapshot         string       `json:"sql_snapshot"`
+	ExecutedBy          string       `json:"executed_by"`
+	Username            string       `json:"username"`
+	StartedAt           time.Time    `json:"started_at"`
+	FinishedAt          *time.Time   `json:"finished_at,omitempty"`
+	ExecutionMs         int64        `json:"execution_ms"`
+}
+
 // kontrak pemeriksaan hak akses ke modul access control
 type Authorizer interface {
 	RequireDatabase(ctx context.Context, principal Principal, databaseID string, action Action) error
@@ -177,6 +196,7 @@ type Store interface {
 	CompleteRunFailed(ctx context.Context, runID, migrationID int64, errMsg string, execMs int64, finishedAt time.Time) error
 	CompleteRunSucceeded(ctx context.Context, runID, migrationID int64, databaseID string, execMs int64, finishedAt time.Time) (assignedVersion int64, err error)
 	ListRunsByMigration(ctx context.Context, migrationID int64) ([]MigrationRun, error)
+	ListMigrationHistory(ctx context.Context, databaseID string) ([]HistoryEntry, error)
 }
 
 // kontrak untuk membuka transaksi ke database target
@@ -197,14 +217,22 @@ type TargetTx interface {
 
 // struktur data catatan aktivitas audit
 type AuditEvent struct {
-	ActorUserID string
-	Action      string
-	ObjectType  string
-	ObjectID    int64
-	DatabaseID  string
-	Status      string
-	Message     string
-	CreatedAt   time.Time
+	ActorUserID   string
+	Action        string
+	ObjectType    string
+	ObjectID      int64
+	DatabaseID    string
+	Status        string
+	Message       string
+	CreatedAt     time.Time
+	ExecutionID   int64
+	Operation     RunOperation
+	AttemptNumber int
+	Revision      int64
+	Version       *int64
+	DurationMs    int64
+	SQL           string
+	SQLState      string
 }
 
 // kontrak opsional untuk mencatat aktivitas ke log audit
@@ -662,6 +690,13 @@ func (s *Service) ListMigrations(ctx context.Context, principal Principal, datab
 	return s.store.ListMigrationsByDatabase(ctx, databaseID)
 }
 
+func (s *Service) ListMigrationHistory(ctx context.Context, principal Principal, databaseID string) ([]HistoryEntry, error) {
+	if err := s.authorize(ctx, principal, databaseID, ActionReadMigration); err != nil {
+		return nil, err
+	}
+	return s.store.ListMigrationHistory(ctx, databaseID)
+}
+
 // mengambil detail migrasi beserta riwayat percobaan eksekusinya
 func (s *Service) GetMigrationDetail(ctx context.Context, principal Principal, databaseID string, migrationID int64) (*MigrationDetail, error) {
 	if err := s.authorize(ctx, principal, databaseID, ActionReadMigration); err != nil {
@@ -701,7 +736,7 @@ func (s *Service) ForwardMigration(ctx context.Context, principal Principal, dat
 	return s.execute(ctx, principal, databaseID, migrationID, RunForward)
 }
 
-func (s *Service) execute(ctx context.Context, principal Principal, databaseID string, migrationID int64, operation RunOperation) (*ExecuteResult, error) {
+func (s *Service) execute(ctx context.Context, principal Principal, databaseID string, migrationID int64, operation RunOperation) (_ *ExecuteResult, outcomeErr error) {
 	if err := s.authorize(ctx, principal, databaseID, ActionExecuteMigration); err != nil {
 		return nil, err
 	}
@@ -763,35 +798,55 @@ func (s *Service) execute(ctx context.Context, principal Principal, databaseID s
 	if err := s.store.CreateRun(ctx, run); err != nil {
 		return nil, err
 	}
+	s.logRun(ctx, m, run, AuditEvent{Action: "migration_attempt_started", Status: string(run.Status)}, startTime, nil)
+	defer func() {
+		status := string(run.Status)
+		if errors.Is(outcomeErr, ErrOutcomeUnconfirmed) {
+			status = "UNCONFIRMED"
+		}
+		s.logRun(ctx, m, run, AuditEvent{Action: "migration_attempt_finished", Status: status}, startTime, outcomeErr)
+	}()
 	if m.FrozenAt == nil {
 		m.FrozenAt = &startTime
 	}
 	if beginErr != nil {
-		return s.failRun(ctx, principal, m, run, startTime, fmt.Errorf("gagal membuka transaksi ke database target: %w", beginErr))
+		return s.failRun(ctx, m, run, startTime, fmt.Errorf("gagal membuka transaksi ke database target: %w", beginErr))
 	}
 
 	if err := tx.AcquireTargetLock(ctx, databaseID); err != nil {
 		rollbackErr := tx.Rollback(ctx)
 		committed = true
-		return s.failRun(ctx, principal, m, run, startTime, errors.Join(fmt.Errorf("gagal mengunci urutan migrasi pada database target: %w", err), rollbackErr))
+		s.logTargetRollback(ctx, m, run, rollbackErr)
+		return s.failRun(ctx, m, run, startTime, errors.Join(fmt.Errorf("gagal mengunci urutan migrasi pada database target: %w", err), rollbackErr))
 	}
 
-	// jalankan kueri sql pada database target, langsung rollback jika gagal
+	sqlStartedAt := s.nowFn()
+	loggedSQL := ""
+	if s.audit != nil {
+		loggedSQL = redactAuditSQL(run.SQLSnapshot, tx.Dialect())
+	}
+	s.logRun(ctx, m, run, AuditEvent{Action: "migration_sql_started", Status: "RUNNING", SQL: loggedSQL}, sqlStartedAt, nil)
 	if err := tx.ExecSQL(ctx, run.SQLSnapshot); err != nil {
+		s.logRun(ctx, m, run, AuditEvent{Action: "migration_sql_finished", Status: "FAILED", SQL: loggedSQL}, sqlStartedAt, err)
 		rollbackErr := tx.Rollback(ctx)
 		committed = true
-		return s.failRun(ctx, principal, m, run, startTime, errors.Join(err, rollbackErr))
+		s.logTargetRollback(ctx, m, run, rollbackErr)
+		return s.failRun(ctx, m, run, startTime, errors.Join(err, rollbackErr))
 	}
+	s.logRun(ctx, m, run, AuditEvent{Action: "migration_sql_finished", Status: "SUCCEEDED", SQL: loggedSQL}, sqlStartedAt, nil)
 
 	// simpan perubahan secara permanen di database target
 	if err := tx.Commit(ctx); err != nil {
 		committed = true
 		if errors.Is(err, ErrTargetCommitRolledBack) {
-			return s.failRun(ctx, principal, m, run, startTime, err)
+			s.logRun(ctx, m, run, AuditEvent{Action: "migration_transaction_finished", Status: "ROLLED_BACK"}, startTime, err)
+			return s.failRun(ctx, m, run, startTime, err)
 		}
+		s.logRun(ctx, m, run, AuditEvent{Action: "migration_transaction_finished", Status: "UNCONFIRMED"}, startTime, err)
 		return nil, fmt.Errorf("%w: commit target run %d: %w", ErrOutcomeUnconfirmed, run.ID, err)
 	}
 	committed = true
+	s.logRun(ctx, m, run, AuditEvent{Action: "migration_transaction_finished", Status: "COMMITTED"}, startTime, nil)
 
 	finishTime := s.nowFn()
 	execMs := finishTime.Sub(startTime).Milliseconds()
@@ -818,17 +873,6 @@ func (s *Service) execute(ctx context.Context, principal Principal, databaseID s
 	run.ExecutionMs = execMs
 	run.FinishedAt = &finishTime
 
-	s.logAudit(ctx, AuditEvent{
-		ActorUserID: principal.UserID,
-		Action:      string(ActionExecuteMigration),
-		ObjectType:  "migration",
-		ObjectID:    m.ID,
-		DatabaseID:  databaseID,
-		Status:      "SUCCESS",
-		Message:     fmt.Sprintf("Migrasi #%d, versi v%d: %s berhasil", m.ID, assignedVersion, operation),
-		CreatedAt:   finishTime,
-	})
-
 	return &ExecuteResult{
 		Migration: *m,
 		Run:       *run,
@@ -836,7 +880,7 @@ func (s *Service) execute(ctx context.Context, principal Principal, databaseID s
 }
 
 // mencatat kegagalan eksekusi migrasi beserta pesan errornya ke database platform
-func (s *Service) failRun(ctx context.Context, principal Principal, m *Migration, run *MigrationRun, startTime time.Time, cause error) (*ExecuteResult, error) {
+func (s *Service) failRun(ctx context.Context, m *Migration, run *MigrationRun, startTime time.Time, cause error) (*ExecuteResult, error) {
 	errMsg := cause.Error()
 	finishTime := s.nowFn()
 	execMs := finishTime.Sub(startTime).Milliseconds()
@@ -860,21 +904,18 @@ func (s *Service) failRun(ctx context.Context, principal Principal, m *Migration
 	run.ExecutionMs = execMs
 	run.FinishedAt = &finishTime
 
-	s.logAudit(ctx, AuditEvent{
-		ActorUserID: principal.UserID,
-		Action:      string(ActionExecuteMigration),
-		ObjectType:  "migration",
-		ObjectID:    m.ID,
-		DatabaseID:  m.DatabaseID,
-		Status:      "FAILED",
-		Message:     fmt.Sprintf("Migrasi #%d: %s gagal: %s", m.ID, run.Operation, errMsg),
-		CreatedAt:   finishTime,
-	})
-
 	return &ExecuteResult{
 		Migration: *m,
 		Run:       *run,
 	}, errors.Join(ErrExecutionFailed, cause)
+}
+
+func (s *Service) logTargetRollback(ctx context.Context, m *Migration, run *MigrationRun, err error) {
+	status := "ROLLED_BACK"
+	if err != nil {
+		status = "ROLLBACK_ERROR"
+	}
+	s.logRun(ctx, m, run, AuditEvent{Action: "migration_transaction_finished", Status: status}, run.StartedAt, err)
 }
 
 // ringkasan rencana eksekusi kueri dari hasil explain postgresql

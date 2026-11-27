@@ -1,8 +1,11 @@
 package migration
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
+	"log/slog"
 	"strings"
 	"sync"
 	"testing"
@@ -201,6 +204,10 @@ func (s *inMemoryStore) ListRunsByMigration(_ context.Context, migrationID int64
 	out := make([]MigrationRun, len(runs))
 	copy(out, runs)
 	return out, nil
+}
+
+func (s *inMemoryStore) ListMigrationHistory(context.Context, string) ([]HistoryEntry, error) {
+	return []HistoryEntry{}, nil
 }
 
 type mockTargetDB struct {
@@ -446,7 +453,9 @@ func TestMigrationCommitUnconfirmedKeepsHistoryOpen(t *testing.T) {
 	targetDB := &mockTargetDB{commitError: errors.New("connection lost after commit")}
 	actor := Principal{UserID: "editor"}
 	authz.Grant(actor.UserID, "db", "VIEW_EDIT")
-	service := NewService(authz, store, targetDB, nil)
+	var output bytes.Buffer
+	logger := SlogAuditLogger{Logger: slog.New(slog.NewJSONHandler(&output, nil))}
+	service := NewService(authz, store, targetDB, logger)
 	draft, err := service.CreateDraft(ctx, actor, CreateDraftInput{
 		DatabaseID: "db", Title: "Create sample", SQLContent: "CREATE TABLE samples (id INT);",
 		SQLDown: "DROP TABLE samples;",
@@ -463,6 +472,49 @@ func TestMigrationCommitUnconfirmedKeepsHistoryOpen(t *testing.T) {
 	}
 	if len(targetDB.committedSQLs) != 1 || targetDB.rolledBackRuns != 0 {
 		t.Fatal("target SQL must not be retried or marked rolled back")
+	}
+	lastLine := strings.Split(strings.TrimSpace(output.String()), "\n")
+	var event struct {
+		Message     string `json:"msg"`
+		Status      string `json:"status"`
+		ExecutionID int64  `json:"execution_id"`
+	}
+	if err := json.Unmarshal([]byte(lastLine[len(lastLine)-1]), &event); err != nil ||
+		event.Message != "migration_attempt_finished" || event.Status != "UNCONFIRMED" || event.ExecutionID != detail.Runs[0].ID {
+		t.Fatalf("expected a structured outcome for the recorded attempt: %s", output.String())
+	}
+}
+
+func TestMigrationAuditMasksSQLValues(t *testing.T) {
+	ctx := context.Background()
+	authz := newMockAuthorizer()
+	actor := Principal{UserID: "editor"}
+	authz.Grant(actor.UserID, "db", "VIEW_EDIT")
+	var output bytes.Buffer
+	logger := SlogAuditLogger{Logger: slog.New(slog.NewJSONHandler(&output, nil))}
+	service := NewService(authz, newInMemoryStore(), &mockTargetDB{}, logger)
+	sqlUp := "INSERT INTO private_records VALUES (918273645, 'sensitive-pass', $$private-note$$); -- confidential"
+	draft, err := service.CreateDraft(ctx, actor, CreateDraftInput{
+		DatabaseID: "db", Title: "Insert test row", SQLContent: sqlUp,
+		IrreversibleReason: "No safe reversal",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := service.ExecuteMigration(ctx, actor, "db", draft.ID)
+	if err != nil || result.Run.SQLSnapshot != sqlUp {
+		t.Fatalf("the recorded snapshot should retain the executed SQL: %+v, %v", result, err)
+	}
+	logs := output.String()
+	for _, field := range []string{"migration_sql_started", "migration_sql_finished", "migration_transaction_finished", "INSERT INTO ?", "COMMITTED"} {
+		if !strings.Contains(logs, field) {
+			t.Fatalf("log did not contain %q: %s", field, logs)
+		}
+	}
+	for _, secret := range []string{"private_records", "918273645", "sensitive-pass", "private-note", "confidential"} {
+		if strings.Contains(logs, secret) {
+			t.Fatalf("log exposed %q", secret)
+		}
 	}
 }
 

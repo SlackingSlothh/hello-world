@@ -5,7 +5,6 @@ import {
   useCallback,
   useEffect,
   useMemo,
-  useRef,
   useState,
 } from "react";
 import { toast } from "sonner";
@@ -42,20 +41,6 @@ import {
   type WorkspaceTab,
 } from "@/components/database/database-panels";
 import {
-  DraftEditor,
-  DraftList,
-  JobList,
-  JobProgress,
-  MigrationHistory,
-  RequestList,
-  RequestReview,
-  type ApprovalProgress,
-  type DraftSummary,
-  type JobSummary,
-  type MigrationRecord,
-  type RequestSummary,
-} from "@/components/migration/migration-panels";
-import {
   EmptyState,
   ErrorState,
   LoadingState,
@@ -73,7 +58,6 @@ import {
   updateConnection,
 } from "@/lib/api/admin";
 import { login } from "@/lib/api/auth";
-import { databaseRouteKey } from "@/lib/database-routing";
 import type { MockQueryRow, MockTableRow } from "@/lib/mock-data";
 
 export function AuthPageForm({
@@ -525,94 +509,6 @@ export function DatabaseWorkspace({
   );
 }
 
-export function MigrationDatabaseList({
-  databases,
-}: {
-  databases: DatabaseSummary[];
-}) {
-  if (databases.length === 0) {
-    return (
-      <EmptyState
-        description="Migration access is available for PostgreSQL databases where your group grants view + edit access."
-        title="No databases available for migration"
-      />
-    );
-  }
-  return (
-    <ul className="grid gap-4 md:grid-cols-2">
-      {databases.map((database) => (
-        <li key={database.id}>
-          <Card>
-            <CardHeader className="flex-row items-start justify-between gap-3">
-              <div>
-                <CardTitle>{database.name}</CardTitle>
-                <CardDescription className="mt-1">
-                  PostgreSQL · {database.status}
-                </CardDescription>
-              </div>
-              <span className="rounded-full bg-primary/10 px-2.5 py-1 text-xs font-medium text-primary">
-                View + Edit
-              </span>
-            </CardHeader>
-            <CardContent className="flex items-center justify-between gap-3">
-              <div className="flex flex-wrap gap-2 text-sm text-muted-foreground">
-                {database.migrationRunning ? <span>Migration running</span> : null}
-                {database.awaitingReview ? <span>Request awaiting review</span> : null}
-              </div>
-              <Link
-                className="inline-flex h-8 shrink-0 items-center justify-center rounded-md bg-primary px-3 text-sm font-medium text-primary-foreground hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                href={`/migration/${databaseRouteKey(database.name)}`}
-              >
-                Open migrations
-              </Link>
-            </CardContent>
-          </Card>
-        </li>
-      ))}
-    </ul>
-  );
-}
-
-export function MigrationDatabaseWorkspace({
-  database,
-  history,
-  drafts,
-  requests,
-  approvals,
-  initialJob,
-  preview,
-}: {
-  database: DatabaseSummary;
-  history: MigrationRecord[];
-  drafts: DraftSummary[];
-  requests: RequestSummary[];
-  approvals: ApprovalProgress[];
-  initialJob: JobSummary;
-  preview: string;
-}) {
-  return (
-    <div className="space-y-5">
-      <PageHeader
-        breadcrumbs={[
-          { label: "Migrations", href: "/migration" },
-          { label: database.name },
-        ]}
-        description="Manage migration history, drafts, reviews, and execution jobs."
-        title={`Migrations · ${database.name}`}
-      />
-      <MigrationWorkspace
-        approvals={approvals}
-        databaseName={database.name}
-        drafts={drafts}
-        history={history}
-        initialJob={initialJob}
-        preview={preview}
-        requests={requests}
-      />
-    </div>
-  );
-}
-
 function SchemaWorkspace({
   schemas,
   rows,
@@ -761,174 +657,6 @@ function QueryWorkspace({ rows }: { rows: MockQueryRow[] }) {
           truncated={false}
         />
       ) : null}
-    </div>
-  );
-}
-
-function MigrationWorkspace({
-  history,
-  drafts: initialDrafts,
-  requests,
-  approvals,
-  initialJob,
-  preview,
-  databaseName,
-}: {
-  history: MigrationRecord[];
-  drafts: DraftSummary[];
-  requests: RequestSummary[];
-  approvals: ApprovalProgress[];
-  initialJob: JobSummary;
-  preview: string;
-  databaseName?: string;
-}) {
-  const [drafts, setDrafts] = useState(initialDrafts);
-  const [hideRollbacks, setHideRollbacks] = useState(false);
-  const pollCount = useRef(0);
-  const fetchJob = useCallback(
-    async (jobId: string) => {
-      await new Promise((resolve) => setTimeout(resolve, 250));
-      pollCount.current += 1;
-      return {
-        ...initialJob,
-        id: jobId,
-        status: pollCount.current > 1 ? "succeeded" : "running",
-        batchesCommitted: pollCount.current > 1 ? 10 : 5,
-        rowsCommitted: pollCount.current > 1 ? 10000 : 5000,
-      };
-    },
-    [initialJob],
-  );
-
-  return (
-    <div className="space-y-8">
-      {databaseName ? (
-        <p className="text-sm text-muted-foreground">
-          Managing migrations for <span className="font-medium text-foreground">{databaseName}</span>
-        </p>
-      ) : null}
-      <section className="space-y-4">
-        <PageHeader
-          description="Applied changes and rollback availability."
-          title="Migration history"
-        />
-        <MigrationHistory
-          hideRollbacks={hideRollbacks}
-          onHideRollbacksChange={setHideRollbacks}
-          records={history}
-        />
-      </section>
-      <section className="space-y-4">
-        <PageHeader
-          actions={
-            <Button
-              onClick={() => toast.info("Mock draft form is ready below.")}
-            >
-              New draft
-            </Button>
-          }
-          description="Create, validate, and request migration drafts."
-          title="Drafts"
-        />
-        <Card>
-          <CardContent className="pt-6">
-            <DraftEditor
-              initialValue={{
-                name: "",
-                description: "",
-                upSql: "",
-                downSql: "",
-                irreversible: false,
-                mode: "single",
-                batchSize: 1000,
-                cursorColumn: "",
-              }}
-              onSave={(value) => {
-                setDrafts((current) => [
-                  ...current,
-                  {
-                    id: `draft-${Date.now()}`,
-                    name: value.name,
-                    status: "valid",
-                    mode: value.mode,
-                  },
-                ]);
-                toast.success("Mock draft saved.");
-              }}
-            />
-          </CardContent>
-        </Card>
-        <DraftList
-          canEdit
-          drafts={drafts}
-          onDelete={(draft) => {
-            setDrafts((current) =>
-              current.filter((item) => item.id !== draft.id),
-            );
-            toast.success("Mock draft deleted.");
-          }}
-          onDuplicate={(draft) => {
-            setDrafts((current) => [
-              ...current,
-              {
-                ...draft,
-                id: `draft-${Date.now()}`,
-                name: `${draft.name} copy`,
-                status: "invalid",
-              },
-            ]);
-            toast.success("Mock draft duplicated.");
-          }}
-          onEdit={(draft) => toast.info(`Mock editing ${draft.name}.`)}
-          onRebase={(draft) => {
-            setDrafts((current) =>
-              current.map((item) =>
-                item.id === draft.id ? { ...item, status: "valid" } : item,
-              ),
-            );
-            toast.success("Mock draft rebased.");
-          }}
-          onRequest={(draft) =>
-            toast.success(`Mock request submitted for ${draft.name}.`)
-          }
-          onValidate={(draft) =>
-            toast.success(`${draft.name} passed mock validation.`)
-          }
-        />
-      </section>
-      <section className="space-y-4">
-        <PageHeader
-          description="Approval status for pending changes."
-          title="Requests"
-        />
-        <RequestList
-          onSelect={(request) => toast.info(`Reviewing ${request.id}.`)}
-          requests={requests}
-        />
-        <RequestReview
-          approvals={approvals}
-          onApprove={() => toast.success("Mock approval recorded.")}
-          onReject={(comment) =>
-            toast.success(`Mock rejection recorded: ${comment}`)
-          }
-          sqlPreview={preview}
-        />
-      </section>
-      <section className="space-y-4">
-        <PageHeader
-          description="Progress for background migration jobs."
-          title="Jobs"
-        />
-        <JobList
-          jobs={[initialJob]}
-          onPageChange={() => undefined}
-          onSelect={() => toast.info("Showing the current job progress.")}
-          page={1}
-          pageSize={20}
-          total={1}
-        />
-        <JobProgress fetchJob={fetchJob} initialJob={initialJob} />
-      </section>
     </div>
   );
 }

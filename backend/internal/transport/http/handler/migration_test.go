@@ -146,6 +146,10 @@ func (s *routeMigrationStore) ListRunsByMigration(_ context.Context, migrationID
 	return append([]migration.MigrationRun(nil), s.runs[migrationID]...), nil
 }
 
+func (s *routeMigrationStore) ListMigrationHistory(context.Context, string) ([]migration.HistoryEntry, error) {
+	return []migration.HistoryEntry{}, nil
+}
+
 type routeTargetConnector struct{}
 
 func (routeTargetConnector) BeginTargetTx(context.Context, string) (migration.TargetTx, error) {
@@ -271,6 +275,16 @@ func TestMigrationRoutes_ViewOnlyCannotMutate(t *testing.T) {
 		strings.NewReader(`{"title":"nope","sql_content":"CREATE TABLE denied (id INT);"}`)))
 	if response.Code != http.StatusForbidden {
 		t.Fatalf("ViewOnly migration create should be forbidden, got %d: %s", response.Code, response.Body.String())
+	}
+	history := httptest.NewRecorder()
+	api.ServeHTTP(history, httptest.NewRequest(http.MethodGet, "/api/v1/connections/connection-1/migrations/history", nil))
+	if history.Code != http.StatusOK || !strings.Contains(history.Body.String(), `"runs":[]`) {
+		t.Fatalf("ViewOnly should see an empty history: got %d: %s", history.Code, history.Body.String())
+	}
+	forbidden := httptest.NewRecorder()
+	api.ServeHTTP(forbidden, httptest.NewRequest(http.MethodGet, "/api/v1/connections/another-db/migrations/history", nil))
+	if forbidden.Code != http.StatusForbidden {
+		t.Fatalf("history from another connection should be forbidden: %d", forbidden.Code)
 	}
 }
 

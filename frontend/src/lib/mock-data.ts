@@ -2,15 +2,6 @@ import type {
   DatabaseSummary,
   SchemaNode,
 } from "@/components/database/database-panels";
-import type {
-  ApprovalProgress,
-  DraftSummary,
-  JobSummary,
-  MigrationRecord,
-  RequestSummary,
-} from "@/components/migration/migration-panels";
-import { databaseRouteKey } from "@/lib/database-routing";
-
 export type MockTableRow = {
   id: string;
   name: string;
@@ -88,21 +79,6 @@ class MockDatabaseRepository extends MockRepository<DatabaseSummary> {
     ];
   }
 
-  async findByName(name: string): Promise<DatabaseSummary | undefined> {
-    const databases = await this.list();
-    const routeName = databaseRouteKey(name);
-    return databases.find(
-      (database) => databaseRouteKey(database.name) === routeName,
-    );
-  }
-
-  async listEditableForMigrations(): Promise<DatabaseSummary[]> {
-    const databases = await this.list();
-    return databases.filter(
-      (database) => database.engine === "postgres" && database.access === "view_edit",
-    );
-  }
-
   async tableRows(): Promise<MockTableRow[]> {
     return [
       {
@@ -134,98 +110,4 @@ class MockDatabaseRepository extends MockRepository<DatabaseSummary> {
   }
 }
 
-class MockMigrationRepository extends MockRepository<MigrationRecord> {
-  constructor() {
-    super([
-      {
-        id: "migration-001",
-        sequence: 1,
-        name: "Create customers",
-        type: "forward",
-        status: "succeeded",
-        reversible: true,
-        executedBy: "Ari Leader",
-        executedAt: "2026-11-12T10:15:00.000Z",
-        durationMs: 812,
-      },
-      {
-        id: "migration-002",
-        sequence: 2,
-        name: "Add customer index",
-        type: "forward",
-        status: "succeeded",
-        reversible: true,
-        executedBy: "Demo Administrator",
-        executedAt: "2026-11-12T11:30:00.000Z",
-        durationMs: 132,
-      },
-    ]);
-  }
-
-  async drafts(): Promise<DraftSummary[]> {
-    return [
-      {
-        id: "draft-001",
-        name: "Add customer status",
-        status: "valid",
-        mode: "single",
-      },
-      {
-        id: "draft-002",
-        name: "Backfill customer region",
-        status: "stale",
-        mode: "batch",
-      },
-    ];
-  }
-
-  async requests(): Promise<RequestSummary[]> {
-    return [
-      {
-        id: "request-001",
-        type: "Forward migration",
-        status: "pending_approval",
-        requester: "Ari Leader",
-        createdAt: "2026-11-13T08:30:00.000Z",
-      },
-    ];
-  }
-
-  async approvals(): Promise<ApprovalProgress[]> {
-    return [
-      {
-        groupId: "group-analytics",
-        groupName: "Analytics",
-        leaderName: "Ari Leader",
-        approved: true,
-      },
-      {
-        groupId: "group-admins",
-        groupName: "Administrators",
-        leaderName: "Demo Administrator",
-        approved: false,
-      },
-    ];
-  }
-
-  async jobs(): Promise<JobSummary[]> {
-    return [
-      {
-        id: "job-0007",
-        status: "running",
-        startedAt: "2026-11-13T08:45:00.000Z",
-        batchesCommitted: 3,
-        batchesTotal: 10,
-        rowsCommitted: 3000,
-        currentCursor: "customer-3000",
-      },
-    ];
-  }
-
-  async reviewPreview(): Promise<string> {
-    return "ALTER TABLE customers ADD COLUMN status text NOT NULL DEFAULT 'active';";
-  }
-}
-
 export const mockDatabases = new MockDatabaseRepository();
-export const mockMigrations = new MockMigrationRepository();

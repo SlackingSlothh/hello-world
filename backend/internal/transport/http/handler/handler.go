@@ -80,6 +80,7 @@ func (h *Handler) routes() {
 	h.mux.Handle("GET /api/v1/connections/{id}/schemas/{schema}/tables/{table}/rows", connectionUser(authz.ReadData, h.rows))
 	h.mux.Handle("POST /api/v1/connections/{id}/query", connectionUser(authz.ReadData, h.selectQuery))
 	h.mux.Handle("GET /api/v1/connections/{id}/migrations", connectionUser(authz.ReadMigration, h.listMigrations))
+	h.mux.Handle("GET /api/v1/connections/{id}/migrations/history", connectionUser(authz.ReadMigration, h.listMigrationHistory))
 	h.mux.Handle("GET /api/v1/connections/{id}/migrations/{migrationID}", connectionUser(authz.ReadMigration, h.getMigration))
 	h.mux.Handle("POST /api/v1/connections/{id}/migrations", connectionUser(authz.CreateMigration, h.createMigration))
 	h.mux.Handle("PATCH /api/v1/connections/{id}/migrations/{migrationID}", connectionUser(authz.UpdateMigration, h.updateMigration))

@@ -14,6 +14,8 @@ import {
 import { ErrorState } from "@/components/shared/async-states";
 import { PaginationControls } from "@/components/shared/pagination-controls";
 import { StatusBadge } from "@/components/shared/status-badge";
+import type { MigrationHistoryEntry } from "@/lib/api/migrations";
+import { visibleMigrationHistory } from "@/lib/migration-history";
 
 const dateTimeFormatter = new Intl.DateTimeFormat("en-US", {
   dateStyle: "medium",
@@ -25,43 +27,44 @@ function formatDateTime(value: string) {
   return dateTimeFormatter.format(new Date(value));
 }
 
-export type MigrationRecord = {
-  id: string;
-  sequence: number;
-  name: string;
-  type: "forward" | "rollback";
-  status: string;
-  reversible: boolean;
-  executedBy: string;
-  executedAt: string;
-  durationMs?: number;
-  cancelsMigrationId?: string;
-};
-
-export function MigrationHistory({
-  records,
-  hideRollbacks,
-  onHideRollbacksChange,
-}: {
-  records: MigrationRecord[];
-  hideRollbacks: boolean;
-  onHideRollbacksChange: (hide: boolean) => void;
-}) {
-  const hiddenIds = new Set(
-    hideRollbacks
-      ? records
-          .filter((record) => record.type === "rollback")
-          .flatMap((record) => [
-            record.id,
-            ...(record.cancelsMigrationId ? [record.cancelsMigrationId] : []),
-          ])
-      : [],
-  );
-  const visibleRecords = records.filter((record) => !hiddenIds.has(record.id));
-  const columns: DataTableColumn<MigrationRecord>[] = [
-    { id: "sequence", header: "#", cell: (item) => item.sequence },
-    { id: "name", header: "Migration", cell: (item) => item.name },
-    { id: "type", header: "Type", cell: (item) => item.type },
+export function MigrationHistory({ records }: { records: MigrationHistoryEntry[] }) {
+  const [hideRollbacks, setHideRollbacks] = useState(false);
+  const visibleRecords = visibleMigrationHistory(records, hideRollbacks);
+  const columns: DataTableColumn<MigrationHistoryEntry>[] = [
+    {
+      id: "execution",
+      header: "Execution",
+      cell: (item) => (
+        <div>
+          <span className="font-mono">#{item.id}</span>
+          <div className="text-xs text-muted-foreground">Attempt {item.attempt_number}</div>
+        </div>
+      ),
+    },
+    {
+      id: "name",
+      header: "Migration",
+      cell: (item) => (
+        <div>
+          <span className="font-medium">{item.title}</span>
+          <div className="text-xs text-muted-foreground">
+            #{item.migration_id} · {item.version !== undefined ? `v${item.version} · ` : ""}Revision {item.revision}
+          </div>
+        </div>
+      ),
+    },
+    {
+      id: "operation",
+      header: "Operation",
+      cell: (item) => (
+        <div>
+          {item.operation}
+          {item.rollback_target_run_id && (
+            <div className="text-xs text-muted-foreground">Target #{item.rollback_target_run_id}</div>
+          )}
+        </div>
+      ),
+    },
     {
       id: "status",
       header: "Status",
@@ -72,17 +75,29 @@ export function MigrationHistory({
       header: "Rollback",
       cell: (item) => (item.reversible ? "Reversible" : "Irreversible"),
     },
-    { id: "actor", header: "Executed by", cell: (item) => item.executedBy },
+    { id: "actor", header: "Executed by", cell: (item) => item.username },
     {
       id: "executed",
-      header: "Executed at",
-      cell: (item) => formatDateTime(item.executedAt),
+      header: "Started (UTC)",
+      cell: (item) => formatDateTime(item.started_at),
     },
     {
       id: "duration",
       header: "Duration",
       cell: (item) =>
-        item.durationMs === undefined ? "—" : `${item.durationMs} ms`,
+        item.finished_at === undefined ? "—" : `${item.execution_ms} ms`,
+    },
+    {
+      id: "sql",
+      header: "SQL snapshot",
+      cell: (item) => (
+        <details>
+          <summary className="cursor-pointer underline">View SQL</summary>
+          <pre className="mt-2 max-h-52 w-64 max-w-[70vw] overflow-auto whitespace-pre-wrap break-all rounded bg-muted p-2 text-xs">
+            {item.sql_snapshot}
+          </pre>
+        </details>
+      ),
     },
   ];
 
@@ -91,10 +106,10 @@ export function MigrationHistory({
       <label className="flex items-center gap-2 text-sm">
         <input
           checked={hideRollbacks}
-          onChange={(event) => onHideRollbacksChange(event.target.checked)}
+          onChange={(event) => setHideRollbacks(event.target.checked)}
           type="checkbox"
         />
-        Hide rollbacks and the forward migrations they cancel
+        Hide rollback
       </label>
       <DataTable
         columns={columns}

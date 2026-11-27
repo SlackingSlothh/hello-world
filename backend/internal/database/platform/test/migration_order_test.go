@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strconv"
 	"testing"
 	"time"
 
@@ -111,6 +112,23 @@ func TestMigrationOrder(t *testing.T) {
 		detail.Runs[2].Status != migration.RunStatusFailed || detail.Runs[2].Operation != migration.RunForward ||
 		detail.Runs[4].Status != migration.RunStatusFailed || detail.Runs[4].Operation != migration.RunRollback {
 		t.Fatalf("history should keep successful and failed runs: %+v, %v", detail, err)
+	}
+
+	history, err := service.ListMigrationHistory(ctx, actor, "db")
+	if err != nil || len(history) != 10 {
+		t.Fatalf("history should include all attempts across migrations: %+v, %v", history, err)
+	}
+	latest := history[0]
+	if latest.ID != strconv.FormatInt(nextRollback.Run.ID, 10) ||
+		latest.MigrationID != strconv.FormatInt(c.ID, 10) || latest.Title != c.Title ||
+		latest.RollbackTargetRunID == nil || *latest.RollbackTargetRunID != strconv.FormatInt(cForward.Run.ID, 10) ||
+		latest.Status != migration.RunStatusSucceeded || latest.Username != actor.UserID || latest.SQLSnapshot != c.SQLDown {
+		t.Fatalf("unexpected rollback history entry: %+v", latest)
+	}
+	execSQL(t, platformDB, `INSERT INTO managed_db_connections(id, name, driver, dsn_ciphertext) VALUES ('other', 'Test target', 'postgres', 'unused')`)
+	other, err := service.ListMigrationHistory(ctx, actor, "other")
+	if err != nil || len(other) != 0 {
+		t.Fatalf("history should be scoped by connection ID: %+v, %v", other, err)
 	}
 }
 
