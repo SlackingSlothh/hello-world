@@ -26,7 +26,7 @@ export type DatabaseSummary = {
   name: string;
   engine: "postgres" | "mysql" | "mariadb";
   status: string;
-  access: "view" | "view_edit";
+  access?: "view" | "view_edit";
   migrationRunning?: boolean;
   awaitingReview?: boolean;
 };
@@ -50,7 +50,7 @@ export function DatabaseCard({ database }: { database: DatabaseSummary }) {
       </CardHeader>
       <CardContent className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex flex-wrap items-center gap-2">
-          <AccessBadge level={database.access} />
+          {database.access ? <AccessBadge level={database.access} /> : null}
           {database.migrationRunning ? <StatusBadge status="running" /> : null}
           {database.awaitingReview ? (
             <StatusBadge status="pending approval" />
@@ -290,6 +290,7 @@ export function TableDataGrid<T>({
   page,
   pageSize,
   total,
+  hasNext,
   onPageChange,
   onSort,
 }: {
@@ -299,6 +300,7 @@ export function TableDataGrid<T>({
   page: number;
   pageSize: number;
   total: number;
+  hasNext?: boolean;
   onPageChange: (page: number) => void;
   onSort?: (columnId: string) => void;
 }) {
@@ -326,6 +328,7 @@ export function TableDataGrid<T>({
         rows={rows}
       />
       <PaginationControls
+        hasNext={hasNext}
         onPageChange={onPageChange}
         page={page}
         pageSize={pageSize}

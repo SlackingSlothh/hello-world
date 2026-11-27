@@ -67,7 +67,7 @@ browser-only state.
 | `ConnectionForm`                               | CSR island in admin SSR shell       | Create connection details; edit only the supported pool settings                                                  |
 | `GroupList`, `GroupEditor`, `MemberPicker`     | CSR island in admin SSR shell       | Group membership, exactly-one-leader selection, and group lifecycle actions                                       |
 | `GroupAccessEditor`                            | CSR island in admin SSR shell       | Select a group, search/filter connections, and grant, change, or revoke access                                    |
-| `DatabaseList` / `DatabaseCard`                | SSR initial data + CSR revalidation | Accessible database list, access level, connection state, and review/job indicators                               |
+| `DatabaseList` / `DatabaseCard`                | CSR backend data                    | Accessible list of authorized databases and live connection state                                                  |
 | `DatabaseWorkspaceShell`, `DatabaseTabs`       | SSR shell + CSR navigation          | Database title and Schema / Query navigation                                                                      |
 | `MigrationDatabaseList`                        | SSR initial data + CSR revalidation | Databases where the user can create and request migrations                                                        |
 | `MigrationDatabaseWorkspace`                   | SSR shell + CSR workflows           | Per-database history, drafts, requests, reviews, and jobs                                                         |
@@ -128,9 +128,12 @@ The admin API calls are centralized and traceable:
 - Groups: see the request functions in `src/lib/api/groups.ts`; they use the
   separate restricted proxy route above.
 
-`src/lib/mock-data.ts` continues to provide in-memory database and migration
-examples. Database browsing and migration workflows still contain mock data
-and actions; those are not real database operations.
+Database browsing uses `src/lib/api/database.ts` through the same-origin
+backend proxy. It loads authorized connections, schema/table names, table
+columns, constraints, indices, and paginated rows from the catalog API.
+Read-only SQL is submitted to the backend validator and query service; query
+requests can be cancelled from the editor. Migration workflows use their own
+API client and are not part of this database-viewer integration.
 
 ## Page composition
 

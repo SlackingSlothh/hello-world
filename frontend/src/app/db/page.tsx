@@ -1,16 +1,14 @@
-import { DatabaseList } from "@/components/database/database-panels";
+import { DatabaseDirectoryClient } from "@/components/pages/page-clients";
 import { PageHeader } from "@/components/shared/page-header";
-import { mockDatabases } from "@/lib/mock-data";
 
-export default async function DatabasesPage() {
-  const databases = await mockDatabases.list();
+export default function DatabasesPage() {
   return (
     <>
       <PageHeader
         description="Databases you can browse based on your group access."
         title="Databases"
       />
-      <DatabaseList databases={databases} />
+      <DatabaseDirectoryClient />
     </>
   );
 }
