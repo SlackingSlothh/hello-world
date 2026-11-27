@@ -90,25 +90,3 @@ rerun or that those alerts have been suppressed.
   `backend/internal/services/catalog/query_validation.go`,
   `backend/internal/services/catalog/service.go`, and
   `backend/internal/database/target/postgres/catalog.go`.
-
-## Log injection — database query error logging
-
-- **Finding reference:** The supplied CodeQL data-flow trace; no issue number
-  was provided.
-- **Affected area:** User-supplied SQL reaches the MySQL/PostgreSQL catalog
-  readers. On query failure, a database error may contain text derived from
-  that SQL and was previously written as the `error` log attribute without
-  escaping line-breaking control characters. Catalog operation errors use the
-  same logging path.
-- **Disposition:** Fixed.
-- **Solution:** The shared `observability.RedactString` sanitizer now escapes
-  carriage returns, line feeds, tabs, other Unicode control characters, and
-  Unicode line separators after redacting secrets. SQL error log attributes,
-  transaction rollback errors, and catalog service error attributes pass
-  through this sanitizer. A regression test verifies that injected line
-  breaks and controls are represented as escaped text.
-- **Relevant code:** `backend/internal/observability/redact.go`,
-  `backend/internal/observability/redact_test.go`,
-  `backend/internal/database/target/mysql/catalog.go`,
-  `backend/internal/database/target/postgres/catalog.go`, and
-  `backend/internal/services/catalog/service.go`.

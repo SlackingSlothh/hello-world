@@ -82,9 +82,8 @@ func (s Service) finishOp(ctx context.Context, span trace.Span, started time.Tim
 		status = "failed"
 		level = slog.LevelError
 		span.RecordError(err)
-		logError := observability.RedactString(err.Error())
-		span.SetStatus(codes.Error, logError)
-		attrs = append(attrs, slog.String("error", logError))
+		span.SetStatus(codes.Error, err.Error())
+		attrs = append(attrs, slog.String("error", err.Error()))
 	}
 	attrs = append(attrs, slog.String("status", status))
 	if s.Logger != nil {

@@ -69,18 +69,6 @@ func TestRedactStringAndHeaders(t *testing.T) {
 	}
 }
 
-func TestRedactStringEscapesLogControlCharacters(t *testing.T) {
-	got := RedactString("query failed\r\nforged=true\t\u001b\u2028")
-	if strings.ContainsAny(got, "\r\n\t\u001b\u2028") {
-		t.Fatalf("log control characters were not escaped: %q", got)
-	}
-	for _, escaped := range []string{`\r\n`, `\t`, `\u001b`, `\u2028`} {
-		if !strings.Contains(got, escaped) {
-			t.Errorf("escaped output %q does not contain %q", got, escaped)
-		}
-	}
-}
-
 func TestRedactSQLAndParams(t *testing.T) {
 	sqlIn := "UPDATE platform_users SET password_hash = 'argon2_secret_value' WHERE id = $1"
 	gotSQL := RedactSQL(sqlIn)

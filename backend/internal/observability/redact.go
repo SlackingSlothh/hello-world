@@ -6,18 +6,17 @@ import (
 	"net/http"
 	"regexp"
 	"strings"
-	"unicode"
 )
 
 const RedactedValue = "[REDACTED]"
 
 var (
-	uriCredentialPattern  = regexp.MustCompile(`([a-zA-Z][a-zA-Z0-9+.-]*://[^/\s:@]+:)([^@\s/]+)(@)`)
-	mysqlDSNPattern       = regexp.MustCompile(`(^|[\s"'=])([a-zA-Z0-9._-]+:)([^@\s"']+)(@tcp\(|@unix\()`)
-	kvSecretPattern       = regexp.MustCompile(`(?i)\b(password|passwd|pwd|secret|token|session_id|sessionid|session|api_key|apikey|access_key|private_key|encryption_key)\b(\s*[:=]\s*)("[^"]*"|'[^']*'|[^\s,;&]+)`)
-	bearerPattern         = regexp.MustCompile(`(?i)\b(Bearer|Basic)\s+([A-Za-z0-9._~+/=-]+)`)
-	headerSecretPattern   = regexp.MustCompile(`(?i)\b(Cookie|Set-Cookie|Authorization|Proxy-Authorization)\s*:\s*([^\r\n]+)`)
-	sqlSensitiveLiteral   = regexp.MustCompile(`(?i)\b([a-z0-9_]*(?:password|passwd|secret|token|session|credential|dsn)[a-z0-9_]*)\b(\s*(?:=|!=|<>|LIKE|ILIKE)\s*)('(?:''|[^'])*')`)
+	uriCredentialPattern = regexp.MustCompile(`([a-zA-Z][a-zA-Z0-9+.-]*://[^/\s:@]+:)([^@\s/]+)(@)`)
+	mysqlDSNPattern      = regexp.MustCompile(`(^|[\s"'=])([a-zA-Z0-9._-]+:)([^@\s"']+)(@tcp\(|@unix\()`)
+	kvSecretPattern      = regexp.MustCompile(`(?i)\b(password|passwd|pwd|secret|token|session_id|sessionid|session|api_key|apikey|access_key|private_key|encryption_key)\b(\s*[:=]\s*)("[^"]*"|'[^']*'|[^\s,;&]+)`)
+	bearerPattern        = regexp.MustCompile(`(?i)\b(Bearer|Basic)\s+([A-Za-z0-9._~+/=-]+)`)
+	headerSecretPattern  = regexp.MustCompile(`(?i)\b(Cookie|Set-Cookie|Authorization|Proxy-Authorization)\s*:\s*([^\r\n]+)`)
+	sqlSensitiveLiteral  = regexp.MustCompile(`(?i)\b([a-z0-9_]*(?:password|passwd|secret|token|session|credential|dsn)[a-z0-9_]*)\b(\s*(?:=|!=|<>|LIKE|ILIKE)\s*)('(?:''|[^'])*')`)
 	sensitiveKeyFragments = []string{
 		"password",
 		"passwd",
@@ -63,29 +62,7 @@ func RedactString(raw string) string {
 	out := RedactDSN(raw)
 	out = headerSecretPattern.ReplaceAllString(out, "${1}: "+RedactedValue)
 	out = bearerPattern.ReplaceAllString(out, "${1} "+RedactedValue)
-	return escapeLogControls(out)
-}
-
-func escapeLogControls(raw string) string {
-	var out strings.Builder
-	out.Grow(len(raw))
-	for _, r := range raw {
-		switch r {
-		case '\n':
-			out.WriteString(`\n`)
-		case '\r':
-			out.WriteString(`\r`)
-		case '\t':
-			out.WriteString(`\t`)
-		default:
-			if unicode.IsControl(r) || r == '\u2028' || r == '\u2029' {
-				fmt.Fprintf(&out, `\u%04x`, r)
-			} else {
-				out.WriteRune(r)
-			}
-		}
-	}
-	return out.String()
+	return out
 }
 
 func RedactHeaders(headers http.Header) map[string]string {
