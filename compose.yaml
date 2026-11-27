@@ -26,6 +26,7 @@ services:
   worker:
     build: .
     command: ["/app/worker"]
+    restart: unless-stopped
     environment:
       DATABASE_STORE_DSN: "${DATABASE_STORE_DSN:-postgres://${POSTGRES_USER:-hello_world}:${POSTGRES_PASSWORD:-local_dev_password}@db:5432/${POSTGRES_DB:-hello_world}?sslmode=disable}"
       DATABASE_ENCRYPTION_KEY: ${DATABASE_ENCRYPTION_KEY:-local-dev-connection-encryption-key-change-before-deployment}
