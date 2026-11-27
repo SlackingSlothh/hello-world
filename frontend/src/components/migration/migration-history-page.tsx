@@ -2,15 +2,14 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { FastForward, Play, Plus, RefreshCw, RotateCcw } from "lucide-react";
+import { RefreshCw } from "lucide-react";
 import { toast } from "sonner";
+import { MigrationActions } from "@/components/migration/migration-actions";
 import {
-  DraftEditor,
   JobList,
   JobProgress,
   MigrationHistory,
   toJobSummary,
-  type DraftFormValues,
   type JobSummary,
 } from "@/components/migration/migration-panels";
 import {
@@ -19,35 +18,22 @@ import {
   LoadingState,
 } from "@/components/shared/async-states";
 import { ConfirmDialog } from "@/components/shared/confirm-dialog";
-import {
-  DataTable,
-  type DataTableColumn,
-} from "@/components/shared/data-table";
 import { PageHeader } from "@/components/shared/page-header";
-import { StatusBadge } from "@/components/shared/status-badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
-  createMigration,
   enqueueJobRecovery,
-  enqueueMigrationAction,
   getMigrationJob,
   listMigrationConnections,
   listMigrationJobs,
-  listMigrations,
-  loadMigrationHistory,
+  loadMigrationWorkspace,
   type MigrationConnection,
-  type MigrationDefinition,
-  type MigrationHistoryEntry,
   type MigrationJob,
 } from "@/lib/api/migrations";
 
 type WorkspaceTab = "migrations" | "jobs" | "history";
 
-type WorkspaceData = {
-  connection: MigrationConnection;
-  runs: MigrationHistoryEntry[];
-  migrations: MigrationDefinition[];
+type WorkspaceData = Awaited<ReturnType<typeof loadMigrationWorkspace>> & {
   jobs: MigrationJob[];
 };
 
@@ -76,27 +62,20 @@ export function MigrationHistoryPage({
   const [actionError, setActionError] = useState("");
   const [retry, setRetry] = useState(0);
   const [activeTab, setActiveTab] = useState<WorkspaceTab>("migrations");
-  const [showDraftForm, setShowDraftForm] = useState(false);
-  const [creatingDraft, setCreatingDraft] = useState(false);
-  const [busyMigrationId, setBusyMigrationId] = useState<number>();
   const [busyJobId, setBusyJobId] = useState<string>();
   const [selectedJob, setSelectedJob] = useState<JobSummary>();
   const [pendingRecovery, setPendingRecovery] = useState<PendingRecovery>();
   const [jobsPage, setJobsPage] = useState(1);
 
-  const loadWorkspace = useCallback(
+  const loadFullWorkspace = useCallback(
     async (id: string, signal: AbortSignal): Promise<WorkspaceData> => {
-      const [historyData, migrations, jobs] = await Promise.all([
-        loadMigrationHistory(id, signal),
-        listMigrations(id, signal),
-        listMigrationJobs(id, signal, { limit: 100, offset: 0 }),
+      const [workspace, jobs] = await Promise.all([
+        loadMigrationWorkspace(id, signal),
+        listMigrationJobs(id, signal, { limit: 100, offset: 0 }).catch(
+          () => [] as MigrationJob[],
+        ),
       ]);
-      return {
-        connection: historyData.connection,
-        runs: historyData.runs,
-        migrations,
-        jobs,
-      };
+      return { ...workspace, jobs };
     },
     [],
   );
@@ -105,7 +84,7 @@ export function MigrationHistoryPage({
     const controller = new AbortController();
     const { signal } = controller;
     const request: Promise<PageData> = connectionId
-      ? loadWorkspace(connectionId, signal)
+      ? loadFullWorkspace(connectionId, signal)
       : listMigrationConnections(signal).then((connections) => ({
           connections,
         }));
@@ -130,7 +109,7 @@ export function MigrationHistoryPage({
       },
     );
     return () => controller.abort();
-  }, [connectionId, loadWorkspace, retry]);
+  }, [connectionId, loadFullWorkspace, retry]);
 
   const refreshWorkspace = useCallback(async () => {
     if (!connectionId) {
@@ -139,7 +118,7 @@ export function MigrationHistoryPage({
     }
     const controller = new AbortController();
     try {
-      const fresh = await loadWorkspace(connectionId, controller.signal);
+      const fresh = await loadFullWorkspace(connectionId, controller.signal);
       setData(fresh);
       setActionError("");
       setSelectedJob((current) => {
@@ -152,7 +131,7 @@ export function MigrationHistoryPage({
     } catch (cause) {
       setActionError(errorMessage(cause, "Could not refresh migration data."));
     }
-  }, [connectionId, loadWorkspace]);
+  }, [connectionId, loadFullWorkspace]);
 
   const fetchJobSummary = useCallback(async (jobId: string) => {
     const job = await getMigrationJob(jobId);
@@ -168,74 +147,6 @@ export function MigrationHistoryPage({
     return summary;
   }, []);
 
-  async function handleCreateDraft(values: DraftFormValues) {
-    if (!connectionId) return;
-    setCreatingDraft(true);
-    setActionError("");
-    try {
-      const created = await createMigration(connectionId, {
-        title: values.name,
-        description: values.description,
-        sql_content: values.upSql,
-        sql_down: values.irreversible ? undefined : values.downSql,
-        irreversible_reason: values.irreversible
-          ? values.irreversibleReason
-          : undefined,
-        execution_mode: values.mode === "batch" ? "batch" : "normal",
-        batch_by_attribute:
-          values.mode === "batch" ? values.cursorColumn : undefined,
-        batch_size: values.mode === "batch" ? values.batchSize : undefined,
-      });
-      setData((current) =>
-        current && "migrations" in current
-          ? { ...current, migrations: [created, ...current.migrations] }
-          : current,
-      );
-      setShowDraftForm(false);
-      toast.success(`Migration draft "${created.title}" created.`);
-    } catch (cause) {
-      const msg = errorMessage(cause, "Could not create migration draft.");
-      setActionError(msg);
-      toast.error(msg);
-    } finally {
-      setCreatingDraft(false);
-    }
-  }
-
-  async function handleMigrationAction(
-    migration: MigrationDefinition,
-    action: "execute" | "rollback" | "forward",
-  ) {
-    if (!connectionId) return;
-    setBusyMigrationId(migration.id);
-    setActionError("");
-    try {
-      const enqueued = await enqueueMigrationAction(
-        connectionId,
-        migration.id,
-        action,
-      );
-      const placeholder: JobSummary = {
-        id: enqueued.job_id,
-        executionId: enqueued.execution_id,
-        migrationId: migration.id,
-        action,
-        mode: migration.execution_mode,
-        status: enqueued.status,
-      };
-      setSelectedJob(placeholder);
-      setActiveTab("jobs");
-      toast.success(`Job ${enqueued.job_id} queued for ${action}.`);
-      void refreshWorkspace();
-    } catch (cause) {
-      const msg = errorMessage(cause, `Could not enqueue ${action}.`);
-      setActionError(msg);
-      toast.error(msg);
-    } finally {
-      setBusyMigrationId(undefined);
-    }
-  }
-
   async function handleConfirmRecovery() {
     if (!connectionId || !pendingRecovery) return;
     const { job, action } = pendingRecovery;
@@ -249,7 +160,7 @@ export function MigrationHistoryPage({
         migrationId: job.migrationId,
         action: action === "resume" ? "resume_batch" : "revert_batch",
         mode: "batch",
-        status: enqueued.status,
+        status: enqueued.status ?? "pending",
       };
       setSelectedJob(nextSummary);
       setPendingRecovery(undefined);
@@ -280,136 +191,34 @@ export function MigrationHistoryPage({
     return jobSummaries.slice(start, start + jobsPageSize);
   }, [jobSummaries, jobsPage]);
 
-  const migrationColumns: DataTableColumn<MigrationDefinition>[] = [
-    {
-      id: "title",
-      header: "Migration",
-      cell: (item) => (
-        <div className="min-w-0">
-          <div className="font-medium">{item.title}</div>
-          <div className="text-xs text-muted-foreground">
-            #{item.id}
-            {item.version !== undefined ? ` · v${item.version}` : ""} · Rev{" "}
-            {item.revision}
-          </div>
-          {item.description ? (
-            <p className="mt-1 text-xs text-muted-foreground">
-              {item.description}
-            </p>
-          ) : null}
-        </div>
-      ),
-    },
-    {
-      id: "mode",
-      header: "Mode",
-      cell: (item) => (
-        <div className="text-xs">
-          <div className="font-medium">{item.execution_mode}</div>
-          {item.execution_mode === "batch" ? (
-            <div className="text-muted-foreground">
-              {item.batch_by_attribute ?? "—"} · size {item.batch_size ?? "—"}
-            </div>
-          ) : null}
-        </div>
-      ),
-    },
-    {
-      id: "reversible",
-      header: "Reversible",
-      cell: (item) => (item.sql_down ? "Reversible" : "Irreversible"),
-    },
-    {
-      id: "status",
-      header: "Status",
-      cell: (item) => <StatusBadge status={item.status} />,
-    },
-    {
-      id: "actions",
-      header: "Actions",
-      cell: (item) => {
-        const busy = busyMigrationId === item.id;
-        return (
-          <div className="flex flex-wrap gap-1">
-            {item.status !== "APPLIED" ? (
-              <Button
-                disabled={busy}
-                onClick={() => void handleMigrationAction(item, "execute")}
-                size="sm"
-              >
-                <Play aria-hidden="true" />
-                Execute
-              </Button>
-            ) : (
-              <>
-                {item.sql_down ? (
-                  <Button
-                    disabled={busy}
-                    onClick={() => void handleMigrationAction(item, "rollback")}
-                    size="sm"
-                    variant="outline"
-                  >
-                    <RotateCcw aria-hidden="true" />
-                    Rollback
-                  </Button>
-                ) : null}
-                <Button
-                  disabled={busy}
-                  onClick={() => void handleMigrationAction(item, "forward")}
-                  size="sm"
-                  variant="outline"
-                >
-                  <FastForward aria-hidden="true" />
-                  Forward
-                </Button>
-              </>
-            )}
-          </div>
-        );
-      },
-    },
-  ];
-
-  const workspaceData = data && "runs" in data ? data : undefined;
+  const workspaceHeader = data && "connection" in data ? data.connection : undefined;
 
   return (
     <div className="space-y-5">
       <PageHeader
         actions={
-          workspaceData ? (
-            <div className="flex flex-wrap gap-2">
-              <Button
-                onClick={() => void refreshWorkspace()}
-                size="sm"
-                variant="outline"
-              >
-                <RefreshCw aria-hidden="true" />
-                Refresh
-              </Button>
-              <Button
-                onClick={() => {
-                  setActiveTab("migrations");
-                  setShowDraftForm((open) => !open);
-                }}
-                size="sm"
-              >
-                <Plus aria-hidden="true" />
-                {showDraftForm ? "Close draft form" : "New migration"}
-              </Button>
-            </div>
+          workspaceHeader ? (
+            <Button
+              onClick={() => void refreshWorkspace()}
+              size="sm"
+              variant="outline"
+            >
+              <RefreshCw aria-hidden="true" />
+              Refresh
+            </Button>
           ) : undefined
         }
         breadcrumbs={
           connectionId ? [{ label: "Migrations", href: "/migration" }] : undefined
         }
         description={
-          workspaceData
-            ? `${workspaceData.connection.driver} · ${workspaceData.connection.connected ? "Connected" : "Disconnected"}`
+          workspaceHeader
+            ? `${workspaceHeader.driver} · ${workspaceHeader.connected ? "Connected" : "Disconnected"}`
             : undefined
         }
         title={
-          workspaceData
-            ? `Migrations · ${workspaceData.connection.name}`
+          workspaceHeader
+            ? `Migrations · ${workspaceHeader.name}`
             : "Migrations"
         }
       />
@@ -439,10 +248,7 @@ export function MigrationHistoryPage({
           >
             {(
               [
-                [
-                  "migrations",
-                  `Migrations (${data.migrations.length})`,
-                ],
+                ["migrations", `Migrations (${data.migrations.length})`],
                 ["jobs", `Async jobs (${data.jobs.length})`],
                 ["history", `History (${data.runs.length})`],
               ] as const
@@ -461,28 +267,19 @@ export function MigrationHistoryPage({
           </div>
 
           {activeTab === "migrations" ? (
-            <div className="space-y-5">
-              {showDraftForm ? (
-                <Card>
-                  <CardHeader>
-                    <CardTitle>Create migration draft</CardTitle>
-                  </CardHeader>
-                  <CardContent>
-                    <DraftEditor
-                      busy={creatingDraft}
-                      onSave={handleCreateDraft}
-                    />
-                  </CardContent>
-                </Card>
-              ) : null}
-              <DataTable
-                columns={migrationColumns}
-                emptyDescription="Create a normal or batch migration draft to queue execution."
-                emptyTitle="No migrations defined"
-                getRowId={(item) => String(item.id)}
-                rows={data.migrations}
-              />
-            </div>
+            <MigrationActions
+              canSubmit={data.canSubmit}
+              connectionId={data.connection.id}
+              migrations={data.migrations}
+              onDraftCreated={(draft) =>
+                setData((current) =>
+                  current && "migrations" in current
+                    ? { ...current, migrations: [draft, ...current.migrations] }
+                    : current,
+                )
+              }
+              runs={data.runs}
+            />
           ) : null}
 
           {activeTab === "jobs" ? (
@@ -493,11 +290,15 @@ export function MigrationHistoryPage({
                   fetchJob={fetchJobSummary}
                   initialJob={selectedJob}
                   key={selectedJob.id}
-                  onResume={(job) =>
-                    setPendingRecovery({ job, action: "resume" })
+                  onResume={
+                    data.canSubmit
+                      ? (job) => setPendingRecovery({ job, action: "resume" })
+                      : undefined
                   }
-                  onRevert={(job) =>
-                    setPendingRecovery({ job, action: "revert" })
+                  onRevert={
+                    data.canSubmit
+                      ? (job) => setPendingRecovery({ job, action: "revert" })
+                      : undefined
                   }
                   onTerminal={() => void refreshWorkspace()}
                 />
@@ -506,8 +307,16 @@ export function MigrationHistoryPage({
                 actionBusyJobId={busyJobId}
                 jobs={pagedJobs}
                 onPageChange={setJobsPage}
-                onResume={(job) => setPendingRecovery({ job, action: "resume" })}
-                onRevert={(job) => setPendingRecovery({ job, action: "revert" })}
+                onResume={
+                  data.canSubmit
+                    ? (job) => setPendingRecovery({ job, action: "resume" })
+                    : undefined
+                }
+                onRevert={
+                  data.canSubmit
+                    ? (job) => setPendingRecovery({ job, action: "revert" })
+                    : undefined
+                }
                 onSelect={setSelectedJob}
                 page={jobsPage}
                 pageSize={jobsPageSize}
@@ -547,7 +356,7 @@ export function MigrationHistoryPage({
                     className="inline-flex h-8 items-center rounded-md bg-primary px-3 text-sm font-medium text-primary-foreground hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                     href={`/migration/${encodeURIComponent(connection.id)}`}
                   >
-                    Open workspace
+                    Open migrations
                   </Link>
                 </CardContent>
               </Card>

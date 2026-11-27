@@ -141,8 +141,8 @@ type BatchStepResult struct {
 
 type EnqueueResult struct {
 	JobID       string    `json:"job_id"`
-	ExecutionID string    `json:"execution_id"`
-	Status      JobStatus `json:"status"`
+	ExecutionID string    `json:"execution_id,omitempty"`
+	Status      JobStatus `json:"status,omitempty"`
 }
 
 type ApprovalChecker interface {

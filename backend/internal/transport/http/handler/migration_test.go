@@ -67,6 +67,7 @@ func (r migrationAccessReader) LoadAccess(_ context.Context, _ string) (authz.Us
 }
 
 type routeMigrationStore struct {
+	migration.RequestStore
 	nextMigrationID int64
 	nextRunID       int64
 	migrations      map[int64]*migration.Migration
@@ -145,6 +146,20 @@ func (s *routeMigrationStore) GetRunForReconciliation(_ context.Context, databas
 		}
 	}
 	return migration.MigrationRun{}, migration.TransactionEvidence{}, migration.ErrNotFound
+}
+
+func (s *routeMigrationStore) FailRunBeforeDispatch(_ context.Context, runID, migrationID int64, errMsg string, finishedAt time.Time) (bool, error) {
+	runs := s.runs[migrationID]
+	for i := range runs {
+		run := &runs[i]
+		if run.ID == runID && run.Status == migration.RunStatusRunning && run.SQLDispatchStarted != nil && !*run.SQLDispatchStarted {
+			run.Status = migration.RunStatusFailed
+			run.ErrorMessage = &errMsg
+			run.FinishedAt = &finishedAt
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func (s *routeMigrationStore) CompleteRunFailed(_ context.Context, _ int64, migrationID int64, _ string, _ int64, finishedAt time.Time) error {
@@ -320,6 +335,7 @@ func TestMigrationRunReconciliationRoute(t *testing.T) {
 	store.runs[2] = []migration.MigrationRun{
 		{ID: 42, DatabaseID: "connection-1", Status: migration.RunStatusSucceeded, SQLSnapshot: "private SQL"},
 		{ID: 43, DatabaseID: "connection-1", Status: migration.RunStatusRunning},
+		{ID: 44, MigrationID: 2, DatabaseID: "connection-1", Status: migration.RunStatusRunning, SQLDispatchStarted: new(false)},
 	}
 	const prefix = "/api/v1/admin/connections/"
 	for _, tc := range []struct {
@@ -328,13 +344,15 @@ func TestMigrationRunReconciliationRoute(t *testing.T) {
 		admin  bool
 		path   string
 		status int
+		body   string
 	}{
-		{"unauthenticated", "", false, "connection-1/migration-runs/42/reconcile", http.StatusUnauthorized},
-		{"database editor", "user", false, "connection-1/migration-runs/42/reconcile", http.StatusForbidden},
-		{"admin", "admin", true, "connection-1/migration-runs/42/reconcile", http.StatusOK},
-		{"unknown evidence", "admin", true, "connection-1/migration-runs/43/reconcile", http.StatusConflict},
-		{"wrong connection", "admin", true, "other/migration-runs/42/reconcile", http.StatusNotFound},
-		{"invalid ID", "admin", true, "connection-1/migration-runs/0/reconcile", http.StatusBadRequest},
+		{"unauthenticated", "", false, "connection-1/migration-runs/42/reconcile", http.StatusUnauthorized, ""},
+		{"database editor", "user", false, "connection-1/migration-runs/44/reconcile", http.StatusForbidden, ""},
+		{"admin", "admin", true, "connection-1/migration-runs/42/reconcile", http.StatusOK, `{"execution_id":"42","status":"SUCCEEDED"}`},
+		{"unknown evidence", "admin", true, "connection-1/migration-runs/43/reconcile", http.StatusConflict, ""},
+		{"before dispatch", "admin", true, "connection-1/migration-runs/44/reconcile", http.StatusOK, `{"execution_id":"44","status":"FAILED"}`},
+		{"wrong connection", "admin", true, "other/migration-runs/42/reconcile", http.StatusNotFound, ""},
+		{"invalid ID", "admin", true, "connection-1/migration-runs/0/reconcile", http.StatusBadRequest, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			access := authz.UserAccess{
@@ -349,8 +367,89 @@ func TestMigrationRunReconciliationRoute(t *testing.T) {
 			if response.Code != tc.status {
 				t.Fatalf("got %d, want %d: %s", response.Code, tc.status, response.Body.String())
 			}
-			if tc.status == http.StatusOK && strings.TrimSpace(response.Body.String()) != `{"execution_id":"42","status":"SUCCEEDED"}` {
+			if tc.body != "" && strings.TrimSpace(response.Body.String()) != tc.body {
 				t.Fatalf("reconciliation should return only the execution ID and status: %s", response.Body.String())
+			}
+		})
+	}
+}
+
+type routeRequestApprover struct {
+	migration.RequestStore
+	approvedBy string
+}
+
+func (s *routeRequestApprover) ApproveMigrationRequest(_ context.Context, databaseID string, requestID int64, groupID, reviewerID string, _ time.Time) (migration.MigrationRequest, error) {
+	if databaseID != "connection-1" || requestID != 42 || groupID != "readers" {
+		return migration.MigrationRequest{}, migration.ErrNotFound
+	}
+	s.approvedBy = reviewerID
+	return migration.MigrationRequest{ID: requestID, Status: migration.RequestApproved}, nil
+}
+
+func TestMigrationRequestApprovalRouteAllowsViewOnly(t *testing.T) {
+	approver := &routeRequestApprover{}
+	store := newRouteMigrationStore()
+	store.RequestStore = approver
+	access := authz.UserAccess{
+		UserID: "reader-leader", Active: true, GroupIDs: []string{"readers"},
+		Grants: []authz.GroupGrant{{GroupID: "readers", DatabaseID: "connection-1", Level: authz.ViewOnly}},
+	}
+	service := migration.NewService(migration.AccessAuthorizer{Reader: migrationAccessReader{access: access}}, store, routeTargetConnector{}, nil)
+	api := handler.New(connectionappServiceForTest(), catalogapp.Service{}, accessapp.Service{}, migrationRouteSecurity{access: access}, service)
+	response := httptest.NewRecorder()
+	api.ServeHTTP(response, httptest.NewRequest(http.MethodPut, "/api/v1/connections/connection-1/migration-requests/42/approvals/readers", nil))
+	if response.Code != http.StatusOK || approver.approvedBy != access.UserID {
+		t.Fatalf("view-only leader should reach the approval service: %d %s", response.Code, response.Body.String())
+	}
+	var request migration.MigrationRequest
+	if err := json.Unmarshal(response.Body.Bytes(), &request); err != nil || request.ID != 42 || request.Status != migration.RequestApproved {
+		t.Fatalf("approval should return the current request: %+v, %v", request, err)
+	}
+}
+
+type routeRequestEnqueuer struct {
+	migration.RequestStore
+	err error
+}
+
+func (s routeRequestEnqueuer) EnqueueMigrationRequest(_ context.Context, databaseID string, requestID int64, actorID string, _ time.Time, _ []byte) (string, bool, error) {
+	if databaseID != "connection-1" || requestID != 42 || actorID != "requester" {
+		return "", false, migration.ErrNotFound
+	}
+	if s.err != nil {
+		return "", false, s.err
+	}
+	return "a5e43a4a-5011-4f32-a44b-2ffe7e071f0a", true, nil
+}
+
+func TestMigrationRequestExecuteRoute(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		level  authz.AccessLevel
+		err    error
+		status int
+	}{
+		{"approved", authz.ViewEdit, nil, http.StatusAccepted},
+		{"pending review", authz.ViewEdit, migration.ErrNotApproved, http.StatusConflict},
+		{"view-only", authz.ViewOnly, nil, http.StatusForbidden},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store := newRouteMigrationStore()
+			store.RequestStore = routeRequestEnqueuer{err: tc.err}
+			access := authz.UserAccess{
+				UserID: "requester", Active: true, GroupIDs: []string{"group"},
+				Grants: []authz.GroupGrant{{GroupID: "group", DatabaseID: "connection-1", Level: tc.level}},
+			}
+			service := migration.NewService(migration.AccessAuthorizer{Reader: migrationAccessReader{access: access}}, store, routeTargetConnector{}, nil)
+			api := handler.New(connectionappServiceForTest(), catalogapp.Service{}, accessapp.Service{}, migrationRouteSecurity{access: access}, service)
+			response := httptest.NewRecorder()
+			api.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/api/v1/connections/connection-1/migration-requests/42/execute", nil))
+			if response.Code != tc.status {
+				t.Fatalf("got %d, want %d: %s", response.Code, tc.status, response.Body.String())
+			}
+			if tc.status == http.StatusAccepted && strings.TrimSpace(response.Body.String()) != `{"job_id":"a5e43a4a-5011-4f32-a44b-2ffe7e071f0a"}` {
+				t.Fatalf("expected accepted job ID: %s", response.Body.String())
 			}
 		})
 	}

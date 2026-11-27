@@ -146,8 +146,8 @@ func TestAsyncMigrationJobRoutes(t *testing.T) {
 	approved = false
 	deniedApproval := httptest.NewRecorder()
 	editorAPI.ServeHTTP(deniedApproval, httptest.NewRequest(http.MethodPost, "/api/v1/connections/conn-1/migrations/1/execute", nil))
-	if deniedApproval.Code != http.StatusForbidden {
-		t.Fatalf("expected 403 when unapproved, got %d: %s", deniedApproval.Code, deniedApproval.Body.String())
+	if deniedApproval.Code != http.StatusConflict {
+		t.Fatalf("expected 409 when unapproved, got %d: %s", deniedApproval.Code, deniedApproval.Body.String())
 	}
 
 	approved = true

@@ -1,18 +1,136 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  approveMigrationRequest,
   createMigration,
   enqueueJobRecovery,
   enqueueMigrationAction,
+  enqueueMigrationRequest,
   getMigrationJob,
+  getMigrationRequest,
   listMigrationJobs,
   loadMigrationHistory,
+  loadMigrationWorkspace,
+  submitMigrationRequest,
 } from "./migrations";
 
 afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+const pendingRequest = {
+  id: 42,
+  migration_id: 5,
+  database_id: "sales",
+  operation: "ROLLBACK",
+  revision: 3,
+  target_run_id: 12,
+  sql_snapshot: "DROP TABLE samples;",
+  requested_by: "editor",
+  status: "PENDING_REVIEW",
+  reviews: [
+    { group_id: "analytics", group_name: "Analytics", leader_id: "leader" },
+  ],
+  viewer_id: "leader",
+  can_execute: false,
+};
+
 describe("migration api client", () => {
+  it("sends only the approved request to the queue after explicit Execute", async () => {
+    const jobId = "a5e43a4a-5011-4f32-a44b-2ffe7e071f0a";
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(Response.json(pendingRequest, { status: 201 }))
+      .mockResolvedValueOnce(
+        Response.json({ ...pendingRequest, status: "APPROVED" }),
+      )
+      .mockResolvedValueOnce(
+        Response.json({
+          ...pendingRequest,
+          status: "APPROVED",
+          viewer_id: "editor",
+          can_execute: true,
+        }),
+      )
+      .mockResolvedValueOnce(Response.json({ job_id: jobId }, { status: 202 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const request = await submitMigrationRequest("sales", 5, 3, "ROLLBACK");
+    expect(request.target_run_id).toBe(12);
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      "/api/backend/v1/connections/sales/migrations/5/requests",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ revision: 3, operation: "ROLLBACK" }),
+      }),
+    );
+    const approved = await approveMigrationRequest("sales", 42, "analytics");
+    expect(approved.status).toBe("APPROVED");
+    expect(approved.can_execute).toBe(false);
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      "/api/backend/v1/connections/sales/migration-requests/42/approvals/analytics",
+      expect.objectContaining({ method: "PUT" }),
+    );
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect((await getMigrationRequest("sales", 42)).can_execute).toBe(true);
+
+    expect(await enqueueMigrationRequest("sales", 42)).toEqual({
+      job_id: jobId,
+    });
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      4,
+      "/api/backend/v1/connections/sales/migration-requests/42/execute",
+      expect.objectContaining({ method: "POST" }),
+    );
+  });
+
+  it("rejects a response for a different database", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValue(
+          Response.json({ ...pendingRequest, database_id: "other" }),
+        ),
+    );
+    await expect(getMigrationRequest("sales", 42)).rejects.toThrow(
+      "different migration request",
+    );
+  });
+
+  it("opens an empty database so its editor can create the first draft", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        Response.json({
+          id: "sales",
+          name: "Sales",
+          driver: "postgres",
+          connected: true,
+        }),
+      )
+      .mockResolvedValueOnce(Response.json({ database_id: "sales", runs: [] }))
+      .mockResolvedValueOnce(
+        Response.json({
+          database_id: "sales",
+          migrations: null,
+          can_submit: true,
+        }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const workspace = await loadMigrationWorkspace(
+      "sales",
+      new AbortController().signal,
+    );
+    expect(workspace).toMatchObject({
+      migrations: [],
+      runs: [],
+      canSubmit: true,
+    });
+  });
+
   it("loads migration history including batch recovery operations", async () => {
     const fetchMock = vi
       .fn()
@@ -38,7 +156,8 @@ describe("migration api client", () => {
               revision: 1,
               operation: "RESUME_BATCH",
               status: "SUCCEEDED",
-              sql_snapshot: "UPDATE orders SET status = 'done' WHERE id > $1 AND id <= $2",
+              sql_snapshot:
+                "UPDATE orders SET status = 'done' WHERE id > $1 AND id <= $2",
               sql_dispatch_started: true,
               executed_by: "user-1",
               username: "alice",
@@ -67,7 +186,8 @@ describe("migration api client", () => {
           database_id: "db-1",
           title: "Batch backfill",
           description: "Chunked update",
-          sql_content: "UPDATE items SET flag = true WHERE id > $1 AND id <= $2",
+          sql_content:
+            "UPDATE items SET flag = true WHERE id > $1 AND id <= $2",
           sql_down: "UPDATE items SET flag = false WHERE id >= $1 AND id <= $2",
           execution_mode: "batch",
           batch_by_attribute: "id",
@@ -104,7 +224,8 @@ describe("migration api client", () => {
         body: JSON.stringify({
           title: "Batch backfill",
           description: "Chunked update",
-          sql_content: "UPDATE items SET flag = true WHERE id > $1 AND id <= $2",
+          sql_content:
+            "UPDATE items SET flag = true WHERE id > $1 AND id <= $2",
           execution_mode: "batch",
           sql_down: "UPDATE items SET flag = false WHERE id >= $1 AND id <= $2",
           batch_by_attribute: "id",
@@ -174,7 +295,10 @@ describe("migration api client", () => {
       .mockResolvedValueOnce(Response.json(sampleJob));
     vi.stubGlobal("fetch", fetchMock);
 
-    const jobs = await listMigrationJobs("db-1", undefined, { limit: 20, offset: 0 });
+    const jobs = await listMigrationJobs("db-1", undefined, {
+      limit: 20,
+      offset: 0,
+    });
     expect(jobs).toHaveLength(1);
     expect(jobs[0]?.status).toBe("partial");
     expect(jobs[0]?.last_committed_cursor).toBe("3000");
@@ -194,7 +318,12 @@ describe("migration api client", () => {
       )
       .mockResolvedValueOnce(
         Response.json(
-          { error: { code: "access_denied", message: "access to this migration is denied" } },
+          {
+            error: {
+              code: "access_denied",
+              message: "access to this migration is denied",
+            },
+          },
           { status: 403 },
         ),
       );

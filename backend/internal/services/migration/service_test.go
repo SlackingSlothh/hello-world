@@ -49,6 +49,7 @@ func (a *mockAuthorizer) RequireDatabase(_ context.Context, p Principal, databas
 }
 
 type inMemoryStore struct {
+	RequestStore
 	mu            sync.Mutex
 	nextMigID     int64
 	nextRunID     int64
@@ -176,26 +177,38 @@ func (s *inMemoryStore) GetRunForReconciliation(_ context.Context, databaseID st
 }
 
 func (s *inMemoryStore) CompleteRunFailed(_ context.Context, runID, migrationID int64, errMsg string, execMs int64, finishedAt time.Time) error {
+	if !s.failRun(runID, migrationID, errMsg, execMs, finishedAt, false) {
+		return ErrNotFound
+	}
+	return nil
+}
+
+func (s *inMemoryStore) FailRunBeforeDispatch(_ context.Context, runID, migrationID int64, errMsg string, finishedAt time.Time) (bool, error) {
+	return s.failRun(runID, migrationID, errMsg, 0, finishedAt, true), nil
+}
+
+func (s *inMemoryStore) failRun(runID, migrationID int64, errMsg string, execMs int64, finishedAt time.Time, requireUndispatched bool) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if m, ok := s.migrations[migrationID]; ok && m.Status != StatusApplied {
-		m.Status = StatusFailed
-		m.UpdatedAt = finishedAt
-	}
 	runs := s.runsByMigID[migrationID]
 	for i := range runs {
-		if runs[i].ID == runID {
-			runs[i].Status = RunStatusFailed
-			msg := errMsg
-			runs[i].ErrorMessage = &msg
-			runs[i].ExecutionMs = execMs
-			t := finishedAt
-			runs[i].FinishedAt = &t
-			break
+		run := &runs[i]
+		if run.ID != runID || run.Status != RunStatusRunning ||
+			(requireUndispatched && (run.SQLDispatchStarted == nil || *run.SQLDispatchStarted)) {
+			continue
 		}
+		run.Status = RunStatusFailed
+		run.ErrorMessage = &errMsg
+		run.ExecutionMs = execMs
+		run.FinishedAt = &finishedAt
+		if m := s.migrations[migrationID]; m.Status != StatusApplied {
+			m.Status = StatusFailed
+			m.UpdatedAt = finishedAt
+		}
+		return true
 	}
-	return nil
+	return false
 }
 
 func (s *inMemoryStore) CompleteRunSucceeded(_ context.Context, runID, migrationID int64, databaseID string, execMs int64, finishedAt time.Time) (int64, error) {

@@ -12,7 +12,6 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import {
   DataTable,
@@ -24,6 +23,7 @@ import { StatusBadge } from "@/components/shared/status-badge";
 import type {
   MigrationHistoryEntry,
   MigrationJob,
+  MigrationRequest,
 } from "@/lib/api/migrations";
 import { visibleMigrationHistory } from "@/lib/migration-history";
 
@@ -168,7 +168,7 @@ export type DraftFormValues = {
   upSql: string;
   downSql: string;
   irreversible: boolean;
-  irreversibleReason?: string;
+  irreversibleReason: string;
   mode: "single" | "batch";
   batchSize: number;
   cursorColumn: string;
@@ -264,10 +264,12 @@ export function DraftList({
 export function DraftEditor({
   initialValue,
   busy = false,
+  allowBatch = true,
   onSave,
 }: {
   initialValue?: Partial<DraftFormValues>;
   busy?: boolean;
+  allowBatch?: boolean;
   onSave: (value: DraftFormValues) => void | Promise<void>;
 }) {
   const [value, setValue] = useState<DraftFormValues>({
@@ -308,20 +310,22 @@ export function DraftEditor({
         value={value.description}
         onChange={(next) => update("description", next)}
       />
-      <label className="block space-y-2 text-sm font-medium">
-        Execution mode
-        <select
-          className="h-9 w-full rounded-md border bg-background px-3 text-sm"
-          onChange={(event) =>
-            update("mode", event.target.value as "single" | "batch")
-          }
-          value={value.mode}
-        >
-          <option value="single">Normal (single transaction)</option>
-          <option value="batch">Batch (cursor chunked with checkpoints)</option>
-        </select>
-      </label>
-      {value.mode === "batch" ? (
+      {allowBatch ? (
+        <label className="block space-y-2 text-sm font-medium">
+          Execution mode
+          <select
+            className="h-9 w-full rounded-md border bg-background px-3 text-sm"
+            onChange={(event) =>
+              update("mode", event.target.value as "single" | "batch")
+            }
+            value={value.mode}
+          >
+            <option value="single">Normal (single transaction)</option>
+            <option value="batch">Batch (cursor chunked with checkpoints)</option>
+          </select>
+        </label>
+      ) : null}
+      {allowBatch && value.mode === "batch" ? (
         <div className="space-y-3 rounded-lg border bg-muted/30 p-3">
           <div className="grid gap-4 sm:grid-cols-2">
             <NumberField
@@ -380,8 +384,8 @@ export function DraftEditor({
       </label>
       {value.irreversible ? (
         <Field
-          label="Irreversible reason"
-          value={value.irreversibleReason ?? ""}
+          label="Why can’t this migration be reversed?"
+          value={value.irreversibleReason}
           onChange={(next) => update("irreversibleReason", next)}
           required
         />
@@ -402,13 +406,6 @@ export function DraftEditor({
     </form>
   );
 }
-
-export type ApprovalProgress = {
-  groupId: string;
-  groupName: string;
-  leaderName: string;
-  approved: boolean;
-};
 
 export type RequestSummary = {
   id: string;
@@ -463,69 +460,54 @@ export function RequestList({
 }
 
 export function RequestReview({
-  approvals,
-  sqlPreview,
-  rejectCommentRequired = true,
+  request,
   busy = false,
   onApprove,
-  onReject,
 }: {
-  approvals: ApprovalProgress[];
-  sqlPreview: string;
-  rejectCommentRequired?: boolean;
+  request: MigrationRequest;
   busy?: boolean;
-  onApprove: () => void;
-  onReject: (comment: string) => void;
+  onApprove: (groupId: string) => void;
 }) {
-  const [comment, setComment] = useState("");
   return (
     <section className="space-y-5">
       <div>
         <h2 className="font-semibold">SQL preview</h2>
         <pre className="mt-2 max-h-96 overflow-auto rounded-lg border bg-muted/40 p-4 text-xs">
-          <code>{sqlPreview}</code>
+          <code>{request.sql_snapshot}</code>
         </pre>
       </div>
       <div>
         <h2 className="font-semibold">Approval progress</h2>
         <ul className="mt-2 space-y-2">
-          {approvals.map((approval) => (
+          {request.reviews.map((approval) => (
             <li
               className="flex flex-wrap items-center justify-between gap-2 rounded-md border p-3 text-sm"
-              key={approval.groupId}
+              key={approval.group_id}
             >
               <span>
-                {approval.groupName} · {approval.leaderName}
+                {approval.group_name} · {approval.leader_id ?? "No active leader"}
               </span>
-              <StatusBadge
-                status={approval.approved ? "approved" : "pending"}
-              />
+              <div className="flex items-center gap-2">
+                <StatusBadge
+                  status={approval.approved_at ? "approved" : "pending"}
+                />
+                {request.status === "PENDING_REVIEW" &&
+                  approval.leader_id === request.viewer_id &&
+                  !approval.approved_at && (
+                    <Button
+                      aria-label={`Approve for ${approval.group_name}`}
+                      disabled={busy}
+                      onClick={() => onApprove(approval.group_id)}
+                      size="sm"
+                      variant="outline"
+                    >
+                      <Check aria-hidden="true" /> Approve
+                    </Button>
+                  )}
+              </div>
             </li>
           ))}
         </ul>
-      </div>
-      <div className="space-y-2">
-        <Label htmlFor="reject-comment">Review comment</Label>
-        <Textarea
-          id="reject-comment"
-          onChange={(event) => setComment(event.target.value)}
-          placeholder="A comment is required when rejecting."
-          value={comment}
-        />
-      </div>
-      <div className="flex flex-wrap gap-2">
-        <Button disabled={busy} onClick={onApprove}>
-          <Check aria-hidden="true" />
-          Approve
-        </Button>
-        <Button
-          disabled={busy || (rejectCommentRequired && !comment.trim())}
-          onClick={() => onReject(comment.trim())}
-          variant="destructive"
-        >
-          <CircleX aria-hidden="true" />
-          Reject
-        </Button>
       </div>
     </section>
   );

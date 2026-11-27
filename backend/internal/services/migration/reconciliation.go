@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	"hello-world/internal/services/authz"
 )
@@ -35,7 +36,7 @@ type ReconcileResult struct {
 	Status      RunStatus `json:"status"`
 }
 
-// ReconcileRun finalizes the existing platform record using a proven target outcome.
+// ReconcileRun closes an undispatched attempt or verifies its outcome on the target.
 func (s *Service) ReconcileRun(ctx context.Context, principal Principal, databaseID string, runID int64) (ReconcileResult, error) {
 	if err := s.authorize(ctx, principal, "", authz.ManageConnections); err != nil {
 		return ReconcileResult{}, err
@@ -50,6 +51,27 @@ func (s *Service) ReconcileRun(ctx context.Context, principal Principal, databas
 	result := ReconcileResult{ExecutionID: strconv.FormatInt(run.ID, 10), Status: run.Status}
 	if run.Status != RunStatusRunning {
 		return result, nil
+	}
+	if run.SQLDispatchStarted != nil && !*run.SQLDispatchStarted {
+		finishedAt := s.nowFn()
+		failed, err := s.store.FailRunBeforeDispatch(ctx, run.ID, run.MigrationID, "Migration attempt closed by reconciliation before SQL dispatch", finishedAt)
+		if err != nil {
+			return ReconcileResult{}, fmt.Errorf("%w: finalizing undispatched run %d: %w", ErrOutcomeUnconfirmed, run.ID, err)
+		}
+		if failed {
+			result.Status = RunStatusFailed
+			s.logReconciledRun(ctx, principal, run, result.Status, nil, finishedAt)
+			return result, nil
+		}
+		// Dispatch or another finalizer won the update. Read the current evidence.
+		run, evidence, err = s.store.GetRunForReconciliation(ctx, databaseID, runID)
+		if err != nil {
+			return ReconcileResult{}, err
+		}
+		if run.Status != RunStatusRunning {
+			result.Status = run.Status
+			return result, nil
+		}
 	}
 	verifier, ok := s.connector.(targetTransactionVerifier)
 	if !ok || evidence.XactID == "" || evidence.TargetIdentity == "" {
@@ -84,12 +106,16 @@ func (s *Service) ReconcileRun(ctx context.Context, principal Principal, databas
 		return ReconcileResult{}, fmt.Errorf("%w: finalizing reconciled run %d: %w", ErrOutcomeUnconfirmed, run.ID, err)
 	}
 
+	s.logReconciledRun(ctx, principal, run, result.Status, version, finishedAt)
+	return result, nil
+}
+
+func (s *Service) logReconciledRun(ctx context.Context, principal Principal, run MigrationRun, status RunStatus, version *int64, finishedAt time.Time) {
 	s.logAudit(ctx, AuditEvent{
 		ActorUserID: principal.UserID, Action: "migration_attempt_reconciled",
-		ObjectType: "migration", ObjectID: run.MigrationID, DatabaseID: databaseID,
-		Status: string(result.Status), CreatedAt: finishedAt, ExecutionID: run.ID,
+		ObjectType: "migration", ObjectID: run.MigrationID, DatabaseID: run.DatabaseID,
+		Status: string(status), CreatedAt: finishedAt, ExecutionID: run.ID,
 		Operation: run.Operation, AttemptNumber: run.AttemptNumber, Revision: run.Revision,
 		Version: version, DurationMs: run.ExecutionMs,
 	})
-	return result, nil
 }

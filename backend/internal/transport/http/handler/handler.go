@@ -92,6 +92,10 @@ func (h *Handler) routes() {
 	h.mux.Handle("GET /api/v1/jobs/{jobID}", user(h.getJob))
 	h.mux.Handle("POST /api/v1/connections/{id}/jobs/{jobID}/resume", connectionUser(authz.ExecuteMigration, h.resumeBatchJob))
 	h.mux.Handle("POST /api/v1/connections/{id}/jobs/{jobID}/revert", connectionUser(authz.ExecuteMigration, h.revertBatchJob))
+	h.mux.Handle("POST /api/v1/connections/{id}/migrations/{migrationID}/requests", connectionUser(authz.ExecuteMigration, h.submitMigrationRequest))
+	h.mux.Handle("GET /api/v1/connections/{id}/migration-requests/{requestID}", connectionUser(authz.ReadMigration, h.getMigrationRequest))
+	h.mux.Handle("PUT /api/v1/connections/{id}/migration-requests/{requestID}/approvals/{groupID}", connectionUser(authz.ReadMigration, h.approveMigrationRequest))
+	h.mux.Handle("POST /api/v1/connections/{id}/migration-requests/{requestID}/execute", connectionUser(authz.ExecuteMigration, h.enqueueMigrationRequest))
 	h.mux.Handle("POST /api/v1/connections/{id}/migrations/explain", connectionUser(authz.ExecuteMigration, h.explainMigration))
 	h.mux.Handle("POST /api/v1/connections/{id}/migrations/schema-diff", connectionUser(authz.ReadMigration, h.schemaDiff))
 }

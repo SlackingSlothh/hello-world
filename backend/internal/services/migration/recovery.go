@@ -86,8 +86,25 @@ func (w *WorkerPool) reconcileUncertainNormalJob(ctx context.Context, lock Datab
 		return false
 	}
 	if run.SQLDispatchStarted != nil && !*run.SQLDispatchStarted {
-		_ = w.service.store.CompleteRunFailed(ctx, run.ID, run.MigrationID, "worker crashed before SQL dispatch", run.ExecutionMs, now)
-		return w.rescheduleOrFailNormal(ctx, lock, job, "worker crashed before SQL dispatch", now)
+		failed, err := w.service.store.FailRunBeforeDispatch(ctx, run.ID, run.MigrationID, "worker crashed before SQL dispatch", now)
+		if err != nil {
+			return false
+		}
+		if failed {
+			return w.rescheduleOrFailNormal(ctx, lock, job, "worker crashed before SQL dispatch", now)
+		}
+		run, evidence, err = w.service.store.GetRunForReconciliation(ctx, job.DatabaseID, matched.ID)
+		if err != nil {
+			return false
+		}
+		if run.Status == RunStatusSucceeded {
+			_ = w.service.jobStore.FinishJob(ctx, job.JobID, JobStatusSuccess, nil, nil, now)
+			_ = w.service.lockStore.ReleaseLock(ctx, lock.DatabaseID, lock.JobID)
+			return true
+		}
+		if run.Status == RunStatusFailed {
+			return w.rescheduleOrFailNormal(ctx, lock, job, "previous attempt failed", now)
+		}
 	}
 
 	verifier, ok := w.service.connector.(targetTransactionVerifier)
