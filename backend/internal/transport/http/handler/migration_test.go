@@ -147,6 +147,20 @@ func (s *routeMigrationStore) GetRunForReconciliation(_ context.Context, databas
 	return migration.MigrationRun{}, migration.TransactionEvidence{}, migration.ErrNotFound
 }
 
+func (s *routeMigrationStore) FailRunBeforeDispatch(_ context.Context, runID, migrationID int64, errMsg string, finishedAt time.Time) (bool, error) {
+	runs := s.runs[migrationID]
+	for i := range runs {
+		run := &runs[i]
+		if run.ID == runID && run.Status == migration.RunStatusRunning && run.SQLDispatchStarted != nil && !*run.SQLDispatchStarted {
+			run.Status = migration.RunStatusFailed
+			run.ErrorMessage = &errMsg
+			run.FinishedAt = &finishedAt
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 func (s *routeMigrationStore) CompleteRunFailed(_ context.Context, _ int64, migrationID int64, _ string, _ int64, finishedAt time.Time) error {
 	s.migrations[migrationID].Status = migration.StatusFailed
 	s.migrations[migrationID].UpdatedAt = finishedAt
@@ -320,6 +334,7 @@ func TestMigrationRunReconciliationRoute(t *testing.T) {
 	store.runs[2] = []migration.MigrationRun{
 		{ID: 42, DatabaseID: "connection-1", Status: migration.RunStatusSucceeded, SQLSnapshot: "private SQL"},
 		{ID: 43, DatabaseID: "connection-1", Status: migration.RunStatusRunning},
+		{ID: 44, MigrationID: 2, DatabaseID: "connection-1", Status: migration.RunStatusRunning, SQLDispatchStarted: new(false)},
 	}
 	const prefix = "/api/v1/admin/connections/"
 	for _, tc := range []struct {
@@ -328,13 +343,15 @@ func TestMigrationRunReconciliationRoute(t *testing.T) {
 		admin  bool
 		path   string
 		status int
+		body   string
 	}{
-		{"unauthenticated", "", false, "connection-1/migration-runs/42/reconcile", http.StatusUnauthorized},
-		{"database editor", "user", false, "connection-1/migration-runs/42/reconcile", http.StatusForbidden},
-		{"admin", "admin", true, "connection-1/migration-runs/42/reconcile", http.StatusOK},
-		{"unknown evidence", "admin", true, "connection-1/migration-runs/43/reconcile", http.StatusConflict},
-		{"wrong connection", "admin", true, "other/migration-runs/42/reconcile", http.StatusNotFound},
-		{"invalid ID", "admin", true, "connection-1/migration-runs/0/reconcile", http.StatusBadRequest},
+		{"unauthenticated", "", false, "connection-1/migration-runs/42/reconcile", http.StatusUnauthorized, ""},
+		{"database editor", "user", false, "connection-1/migration-runs/44/reconcile", http.StatusForbidden, ""},
+		{"admin", "admin", true, "connection-1/migration-runs/42/reconcile", http.StatusOK, `{"execution_id":"42","status":"SUCCEEDED"}`},
+		{"unknown evidence", "admin", true, "connection-1/migration-runs/43/reconcile", http.StatusConflict, ""},
+		{"before dispatch", "admin", true, "connection-1/migration-runs/44/reconcile", http.StatusOK, `{"execution_id":"44","status":"FAILED"}`},
+		{"wrong connection", "admin", true, "other/migration-runs/42/reconcile", http.StatusNotFound, ""},
+		{"invalid ID", "admin", true, "connection-1/migration-runs/0/reconcile", http.StatusBadRequest, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			access := authz.UserAccess{
@@ -349,7 +366,7 @@ func TestMigrationRunReconciliationRoute(t *testing.T) {
 			if response.Code != tc.status {
 				t.Fatalf("got %d, want %d: %s", response.Code, tc.status, response.Body.String())
 			}
-			if tc.status == http.StatusOK && strings.TrimSpace(response.Body.String()) != `{"execution_id":"42","status":"SUCCEEDED"}` {
+			if tc.body != "" && strings.TrimSpace(response.Body.String()) != tc.body {
 				t.Fatalf("reconciliation should return only the execution ID and status: %s", response.Body.String())
 			}
 		})

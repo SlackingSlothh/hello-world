@@ -269,12 +269,14 @@ func (ps *PostgresStore) GetRunForReconciliation(ctx context.Context, databaseID
 	var run migration.MigrationRun
 	var evidence migration.TransactionEvidence
 	err := ps.platformDB.QueryRowContext(ctx, `
-		SELECT id, migration_id, database_id, attempt_number, revision, operation, status, sql_dispatch_started, execution_ms,
+		SELECT id, migration_id, database_id, attempt_number, revision, operation, status, sql_dispatch_started,
+		       error_message, execution_ms, finished_at,
 		       COALESCE(target_xact_id, ''), COALESCE(target_identity, '')
 		FROM migration_runs
 		WHERE database_id = $1 AND id = $2`, databaseID, runID,
 	).Scan(&run.ID, &run.MigrationID, &run.DatabaseID, &run.AttemptNumber, &run.Revision, &run.Operation,
-		&run.Status, &run.SQLDispatchStarted, &run.ExecutionMs, &evidence.XactID, &evidence.TargetIdentity)
+		&run.Status, &run.SQLDispatchStarted, &run.ErrorMessage, &run.ExecutionMs, &run.FinishedAt,
+		&evidence.XactID, &evidence.TargetIdentity)
 	if errors.Is(err, sql.ErrNoRows) {
 		err = migration.ErrNotFound
 	}
@@ -318,6 +320,18 @@ func validateRunOrder(ctx context.Context, tx *sql.Tx, run *migration.MigrationR
 
 // CompleteRunFailed mencatat hasil percobaan yang gagal (setelah Target DB di-rollback)
 func (ps *PostgresStore) CompleteRunFailed(ctx context.Context, runID, migrationID int64, errMsg string, execMs int64, finishedAt time.Time) error {
+	return ps.completeRunFailed(ctx, runID, migrationID, errMsg, execMs, finishedAt, false)
+}
+
+func (ps *PostgresStore) FailRunBeforeDispatch(ctx context.Context, runID, migrationID int64, errMsg string, finishedAt time.Time) (bool, error) {
+	err := ps.completeRunFailed(ctx, runID, migrationID, errMsg, 0, finishedAt, true)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	return err == nil, err
+}
+
+func (ps *PostgresStore) completeRunFailed(ctx context.Context, runID, migrationID int64, errMsg string, execMs int64, finishedAt time.Time, requireUndispatched bool) error {
 	tx, err := ps.platformDB.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -331,9 +345,10 @@ func (ps *PostgresStore) CompleteRunFailed(ctx context.Context, runID, migration
 		    execution_ms = $2,
 		    finished_at = $3
 		WHERE id = $4 AND migration_id = $5 AND status = 'RUNNING'
+		  AND (NOT $6::boolean OR sql_dispatch_started IS FALSE)
 		RETURNING id
 	`
-	if err := tx.QueryRowContext(ctx, updateRun, errMsg, execMs, finishedAt, runID, migrationID).Scan(&runID); err != nil {
+	if err := tx.QueryRowContext(ctx, updateRun, errMsg, execMs, finishedAt, runID, migrationID, requireUndispatched).Scan(&runID); err != nil {
 		return fmt.Errorf("finish failed migration run: %w", err)
 	}
 

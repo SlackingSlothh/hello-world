@@ -143,14 +143,80 @@ func (s pausedMigrationStore) CreateRun(ctx context.Context, run *migration.Migr
 		return err
 	}
 	s.registered <- run.ID
-	<-s.resume
-	return nil
+	select {
+	case <-s.resume:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 type unavailableMigrationHistory struct{ migration.Store }
 
 func (s unavailableMigrationHistory) CompleteRunSucceeded(context.Context, int64, int64, string, int64, time.Time) (int64, error) {
 	return 0, errors.New("platform history unavailable")
+}
+
+func TestMigrationReconciliationBeforeSQLDispatch(t *testing.T) {
+	platformDB, targetDB := migrationTestDatabases(t)
+	execSQL(t, targetDB, `CREATE SEQUENCE dispatch_count`)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	actor := migration.Principal{UserID: "editor"}
+	store := persistence.NewPostgresStore(platformDB)
+	connector := target.NewSQLTargetConnector(func(context.Context, string) (*sql.DB, error) { return targetDB, nil })
+	authorizer := migration.AuthorizerFunc(func(context.Context, migration.Principal, string, migration.Action) error { return nil })
+	service := migration.NewService(authorizer, store, connector, nil)
+	draft, err := service.CreateDraft(ctx, actor, migration.CreateDraftInput{
+		DatabaseID: "db", Title: "Count dispatch", SQLContent: "SELECT nextval('dispatch_count');",
+		IrreversibleReason: "Sequence increments cannot be rolled back",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	paused := pausedMigrationStore{Store: store, registered: make(chan int64, 1), resume: make(chan struct{})}
+	executor := migration.NewService(authorizer, paused, connector, nil)
+	done := make(chan error, 1)
+	go func() {
+		_, err := executor.ExecuteMigration(ctx, actor, "db", draft.ID)
+		done <- err
+	}()
+	var runID int64
+	select {
+	case runID = <-paused.registered:
+	case err := <-done:
+		t.Fatalf("execution stopped before recording the attempt: %v", err)
+	case <-ctx.Done():
+		close(paused.resume)
+		<-done
+		t.Fatal(ctx.Err())
+	}
+	result, reconcileErr := service.ReconcileRun(ctx, actor, "db", runID)
+	close(paused.resume)
+	executionErr := <-done
+	if reconcileErr != nil || result.Status != migration.RunStatusFailed || result.ExecutionID != strconv.FormatInt(runID, 10) {
+		t.Fatalf("reconciliation should close the existing run: %+v, %v", result, reconcileErr)
+	}
+	if !errors.Is(executionErr, migration.ErrExecutionFailed) || errors.Is(executionErr, migration.ErrOutcomeUnconfirmed) {
+		t.Fatalf("the original executor should report a known failure: %v", executionErr)
+	}
+	var dispatched bool
+	if err := targetDB.QueryRowContext(ctx, `SELECT is_called FROM dispatch_count`).Scan(&dispatched); err != nil || dispatched {
+		t.Fatalf("the original executor should never send migration SQL: dispatched %v, error %v", dispatched, err)
+	}
+	if repeated, err := service.ReconcileRun(ctx, actor, "db", runID); err != nil || repeated != result {
+		t.Fatalf("repeated reconciliation should return the saved result: %+v, %v", repeated, err)
+	}
+	detail, err := service.GetMigrationDetail(ctx, actor, "db", draft.ID)
+	if err != nil || detail.Migration.Status != migration.StatusFailed || detail.Migration.Version != nil ||
+		len(detail.Runs) != 1 || detail.Runs[0].ID != runID || detail.Runs[0].Status != migration.RunStatusFailed ||
+		detail.Runs[0].SQLDispatchStarted == nil || *detail.Runs[0].SQLDispatchStarted || detail.Runs[0].FinishedAt == nil {
+		t.Fatalf("history should show the same attempt failed before dispatch: %+v, %v", detail, err)
+	}
+	if retried, err := service.ExecuteMigration(ctx, actor, "db", draft.ID); err != nil || retried.Run.AttemptNumber != 2 {
+		t.Fatalf("reconciliation should release the reservation for an explicit retry: %+v, %v", retried, err)
+	}
 }
 
 type pausedFailedMigrationHistory struct {
@@ -164,12 +230,32 @@ func (s pausedFailedMigrationHistory) MarkSQLDispatchStarted(ctx context.Context
 		return err
 	}
 	s.dispatched <- runID
-	<-s.resume
-	return nil
+	select {
+	case <-s.resume:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 func (s pausedFailedMigrationHistory) CompleteRunFailed(context.Context, int64, int64, string, int64, time.Time) error {
 	return errors.New("platform history unavailable")
+}
+
+type pausedReconciliationStore struct {
+	migration.Store
+	ready  chan struct{}
+	resume chan struct{}
+}
+
+func (s pausedReconciliationStore) FailRunBeforeDispatch(ctx context.Context, runID, migrationID int64, errMsg string, finishedAt time.Time) (bool, error) {
+	close(s.ready)
+	select {
+	case <-s.resume:
+		return s.Store.FailRunBeforeDispatch(ctx, runID, migrationID, errMsg, finishedAt)
+	case <-ctx.Done():
+		return false, ctx.Err()
+	}
 }
 
 func TestMigrationDatabaseReservation(t *testing.T) {
@@ -285,7 +371,8 @@ func TestMigrationReconciliationOfAbortedTransaction(t *testing.T) {
 		t.Fatal(err)
 	}
 	paused := pausedFailedMigrationHistory{store, make(chan int64, 1), make(chan struct{})}
-	executor := migration.NewService(authorizer, paused, connector, nil)
+	registered := pausedMigrationStore{Store: paused, registered: make(chan int64, 1), resume: make(chan struct{})}
+	executor := migration.NewService(authorizer, registered, connector, nil)
 	done := make(chan error, 1)
 	go func() {
 		_, err := executor.ExecuteMigration(ctx, actor, "db", draft.ID)
@@ -293,21 +380,43 @@ func TestMigrationReconciliationOfAbortedTransaction(t *testing.T) {
 	}()
 	var runID int64
 	select {
-	case runID = <-paused.dispatched:
+	case runID = <-registered.registered:
+	case err := <-done:
+		t.Fatalf("execution stopped before recording the attempt: %v", err)
+	case <-ctx.Done():
+		t.Fatal(ctx.Err())
+	}
+
+	stale := pausedReconciliationStore{Store: store, ready: make(chan struct{}), resume: make(chan struct{})}
+	reconciler := migration.NewService(authorizer, stale, connector, nil)
+	reconciled := make(chan error, 1)
+	go func() {
+		_, err := reconciler.ReconcileRun(ctx, actor, "db", runID)
+		reconciled <- err
+	}()
+	select {
+	case <-stale.ready:
+	case err := <-reconciled:
+		t.Fatalf("reconciliation stopped before it could try closing the undispatched attempt: %v", err)
+	case <-ctx.Done():
+		t.Fatal(ctx.Err())
+	}
+	close(registered.resume)
+	select {
+	case <-paused.dispatched:
 	case err := <-done:
 		t.Fatalf("execution stopped before recording evidence: %v", err)
 	case <-ctx.Done():
-		close(paused.resume)
-		<-done
 		t.Fatal(ctx.Err())
 	}
-	_, pendingErr := service.ReconcileRun(ctx, actor, "db", runID)
+	close(stale.resume)
+	pendingErr := <-reconciled
 	close(paused.resume)
 	if err := <-done; !errors.Is(err, migration.ErrOutcomeUnconfirmed) {
 		t.Fatalf("failure recording the aborted attempt should leave it unconfirmed: %v", err)
 	}
 	if !errors.Is(pendingErr, migration.ErrOutcomeUnconfirmed) {
-		t.Fatalf("reconciliation should leave an in-progress PostgreSQL transaction alone: %v", pendingErr)
+		t.Fatalf("reconciliation should leave the attempt open if dispatch won and the transaction is in progress: %v", pendingErr)
 	}
 
 	_, evidence, err := store.GetRunForReconciliation(ctx, "db", runID)
