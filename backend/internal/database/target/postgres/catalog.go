@@ -221,7 +221,8 @@ func (r Reader) Rows(ctx context.Context, schema, table string, page dbops.PageR
 	sort.Strings(filterNames)
 	args := make([]any, 0, len(filterNames)+2)
 	for _, name := range filterNames {
-		if !containsColumn(cols, name) {
+		column, ok := columnName(cols, name)
+		if !ok {
 			return dbops.RowsPage{}, fmt.Errorf("%w: unknown filter column", dbops.ErrInvalidRequest)
 		}
 		args = append(args, page.Filters[name])
@@ -230,13 +231,14 @@ func (r Reader) Rows(ctx context.Context, schema, table string, page dbops.PageR
 		} else {
 			q += " AND "
 		}
-		q += fmt.Sprintf("%s = $%d", quote(name), len(args))
+		q += fmt.Sprintf("%s = $%d", quote(column), len(args))
 	}
 	if page.Sort != "" {
-		if !containsColumn(cols, page.Sort) {
+		column, ok := columnName(cols, page.Sort)
+		if !ok {
 			return dbops.RowsPage{}, fmt.Errorf("%w: invalid sort column", dbops.ErrInvalidRequest)
 		}
-		q += " ORDER BY " + quote(page.Sort)
+		q += " ORDER BY " + quote(column)
 		if strings.EqualFold(page.Direction, "desc") {
 			q += " DESC"
 		} else {
@@ -323,13 +325,13 @@ func quoteList(in []string) string {
 	}
 	return strings.Join(out, ",")
 }
-func containsColumn(cols []dbops.Column, name string) bool {
+func columnName(cols []dbops.Column, name string) (string, bool) {
 	for _, c := range cols {
 		if c.Name == name {
-			return true
+			return c.Name, true
 		}
 	}
-	return false
+	return "", false
 }
 func selectColumns(cols []dbops.Column, requested []string) ([]string, error) {
 	if len(requested) == 0 {
@@ -339,12 +341,15 @@ func selectColumns(cols []dbops.Column, requested []string) ([]string, error) {
 		}
 		return out, nil
 	}
-	for _, name := range requested {
-		if !containsColumn(cols, name) {
+	out := make([]string, len(requested))
+	for i, name := range requested {
+		column, ok := columnName(cols, name)
+		if !ok {
 			return nil, fmt.Errorf("%w: unknown column", dbops.ErrInvalidRequest)
 		}
+		out[i] = column
 	}
-	return requested, nil
+	return out, nil
 }
 func scanRows(rows *sql.Rows) ([][]any, error) {
 	return scanLimited(rows, 0)
