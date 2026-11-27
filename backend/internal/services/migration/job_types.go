@@ -112,3 +112,27 @@ type JobStatusMetric struct {
 	Status     JobStatus
 	Count      int64
 }
+
+type BatchStepRequest struct {
+	ExecutionID    string
+	BatchNumber    int
+	SQLQuery       string
+	CursorColumn   string
+	LastCursor     string
+	TargetScopeMax string
+	BatchSize      int
+}
+
+type RevertStepRequest struct {
+	ExecutionID  string
+	Checkpoint   BatchCheckpoint
+	SQLDown      string
+	CursorColumn string
+	BatchSize    int
+}
+
+type BatchStepResult struct {
+	Checkpoint       BatchCheckpoint
+	AlreadyCommitted bool
+	Done             bool
+}
