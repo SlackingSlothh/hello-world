@@ -49,6 +49,7 @@ func (a *mockAuthorizer) RequireDatabase(_ context.Context, p Principal, databas
 }
 
 type inMemoryStore struct {
+	RequestStore
 	mu            sync.Mutex
 	nextMigID     int64
 	nextRunID     int64

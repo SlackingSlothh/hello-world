@@ -194,6 +194,7 @@ func (a AccessAuthorizer) RequireDatabase(ctx context.Context, principal Princip
 
 // kontrak penyimpanan data migrasi di database platform
 type Store interface {
+	RequestStore
 	CreateMigration(ctx context.Context, m *Migration) error
 	GetMigrationByID(ctx context.Context, migrationID int64) (*Migration, error)
 	ListMigrationsByDatabase(ctx context.Context, databaseID string) ([]Migration, error)

@@ -228,8 +228,12 @@ func (ps *PostgresStore) CreateRun(ctx context.Context, run *migration.Migration
 		return migration.ErrRevisionChanged
 	}
 	if run.Operation != migration.RunResumeBatch && run.Operation != migration.RunRevertBatch {
-		if err := validateRunOrder(ctx, tx, run); err != nil {
+		targetRunID, err := migrationOrderTarget(ctx, tx, run.DatabaseID, run.MigrationID, run.Operation)
+		if err != nil {
 			return err
+		}
+		if run.Operation == migration.RunRollback {
+			run.RollbackTargetRunID = targetRunID
 		}
 	}
 	if err := tx.QueryRowContext(ctx, `SELECT COALESCE(MAX(attempt_number), 0) + 1 FROM migration_runs WHERE migration_id = $1`,
@@ -284,7 +288,7 @@ func (ps *PostgresStore) GetRunForReconciliation(ctx context.Context, databaseID
 }
 
 // The latest successful operation for each version determines its active state.
-func validateRunOrder(ctx context.Context, tx *sql.Tx, run *migration.MigrationRun) error {
+func migrationOrderTarget(ctx context.Context, db migrationRowReader, databaseID string, requestedMigrationID int64, operation migration.RunOperation) (*int64, error) {
 	const latestSuccess = `
 		SELECT m.id, latest.id
 		FROM migrations m
@@ -295,27 +299,24 @@ func validateRunOrder(ctx context.Context, tx *sql.Tx, run *migration.MigrationR
 		) latest ON TRUE
 		WHERE m.database_id = $1 AND m.version IS NOT NULL`
 	query := latestSuccess + ` AND latest.operation = 'ROLLBACK' ORDER BY m.version ASC LIMIT 1`
-	if run.Operation == migration.RunRollback {
+	if operation == migration.RunRollback {
 		query = latestSuccess + ` AND latest.operation <> 'ROLLBACK' ORDER BY m.version DESC LIMIT 1`
 	}
 	var migrationID, executionID int64
-	err := tx.QueryRowContext(ctx, query, run.DatabaseID).Scan(&migrationID, &executionID)
+	err := db.QueryRowContext(ctx, query, databaseID).Scan(&migrationID, &executionID)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
-		return err
+		return nil, err
 	}
-	if run.Operation == migration.RunApply {
+	if operation == migration.RunApply {
 		if err == nil {
-			return fmt.Errorf("%w: forward pending on this database", migration.ErrMigrationOrder)
+			return nil, fmt.Errorf("%w: forward pending on this database", migration.ErrMigrationOrder)
 		}
-		return nil
+		return nil, nil
 	}
-	if err != nil || run.MigrationID != migrationID {
-		return migration.ErrMigrationOrder
+	if err != nil || requestedMigrationID != migrationID {
+		return nil, migration.ErrMigrationOrder
 	}
-	if run.Operation == migration.RunRollback {
-		run.RollbackTargetRunID = &executionID
-	}
-	return nil
+	return &executionID, nil
 }
 
 // CompleteRunFailed mencatat hasil percobaan yang gagal (setelah Target DB di-rollback)

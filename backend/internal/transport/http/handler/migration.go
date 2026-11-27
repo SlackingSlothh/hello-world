@@ -137,6 +137,65 @@ func (h *Handler) executeMigration(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, result)
 }
 
+func (h *Handler) submitMigrationRequest(w http.ResponseWriter, r *http.Request) {
+	principal, ok := h.migrationPrincipal(w, r)
+	if !ok {
+		return
+	}
+	migrationID, ok := parseMigrationID(w, r)
+	if !ok {
+		return
+	}
+	var body struct {
+		Operation migration.RunOperation `json:"operation"`
+		Revision  int64                  `json:"revision"`
+	}
+	if !decode(w, r, &body) {
+		return
+	}
+	request, err := h.migrations.SubmitMigrationRequest(r.Context(), principal, r.PathValue("id"), migrationID, body.Revision, body.Operation)
+	if err != nil {
+		writeMigrationError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, request)
+}
+
+func (h *Handler) getMigrationRequest(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	principal, ok := h.migrationPrincipal(w, r)
+	if !ok {
+		return
+	}
+	requestID, ok := parsePositivePathID(w, r, "requestID", "request ID")
+	if !ok {
+		return
+	}
+	request, err := h.migrations.GetMigrationRequest(r.Context(), principal, r.PathValue("id"), requestID)
+	if err != nil {
+		writeMigrationError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, request)
+}
+
+func (h *Handler) approveMigrationRequest(w http.ResponseWriter, r *http.Request) {
+	principal, ok := h.migrationPrincipal(w, r)
+	if !ok {
+		return
+	}
+	requestID, ok := parsePositivePathID(w, r, "requestID", "request ID")
+	if !ok {
+		return
+	}
+	request, err := h.migrations.ApproveMigrationRequest(r.Context(), principal, r.PathValue("id"), requestID, r.PathValue("groupID"))
+	if err != nil {
+		writeMigrationError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, request)
+}
+
 func (h *Handler) reconcileMigrationRun(w http.ResponseWriter, r *http.Request) {
 	principal, ok := h.migrationPrincipal(w, r)
 	if !ok {
@@ -209,10 +268,14 @@ func (h *Handler) migrationPrincipal(w http.ResponseWriter, r *http.Request) (mi
 }
 
 func parseMigrationID(w http.ResponseWriter, r *http.Request) (int64, bool) {
-	raw := strings.TrimSpace(r.PathValue("migrationID"))
+	return parsePositivePathID(w, r, "migrationID", "migration ID")
+}
+
+func parsePositivePathID(w http.ResponseWriter, r *http.Request, pathKey, label string) (int64, bool) {
+	raw := strings.TrimSpace(r.PathValue(pathKey))
 	id, err := strconv.ParseInt(raw, 10, 64)
 	if err != nil || id <= 0 {
-		writeError(w, http.StatusBadRequest, "invalid_request", "migration ID must be a positive integer")
+		writeError(w, http.StatusBadRequest, "invalid_request", label+" must be a positive integer")
 		return 0, false
 	}
 	return id, true
@@ -226,12 +289,16 @@ func writeMigrationError(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusForbidden, "access_denied", "access to this migration is denied")
 	case errors.Is(err, migration.ErrNotFound):
 		writeError(w, http.StatusNotFound, "not_found", "migration not found")
+	case errors.Is(err, migration.ErrInvalidMigrationRequest):
+		writeError(w, http.StatusBadRequest, "invalid_request", "provide an apply, rollback, or forward operation and a positive revision")
 	case errors.Is(err, migration.ErrMigrationLocked):
 		writeError(w, http.StatusConflict, "migration_locked", "a migration is running or awaiting outcome verification for this connection")
 	case errors.Is(err, migration.ErrOutcomeUnconfirmed):
 		writeError(w, http.StatusConflict, "migration_outcome_unconfirmed", "verify the previous execution outcome before trying again")
 	case errors.Is(err, migration.ErrMigrationOrder):
-		writeError(w, http.StatusConflict, "migration_out_of_order", "complete the pending forward migrations before applying a new one")
+		writeError(w, http.StatusConflict, "migration_out_of_order", "the requested operation is out of order or its target has changed")
+	case errors.Is(err, migration.ErrIrreversible):
+		writeError(w, http.StatusConflict, "migration_irreversible", "this migration does not have SQL down")
 	case errors.Is(err, migration.ErrAlreadyApplied):
 		writeError(w, http.StatusConflict, "migration_already_applied", "an applied migration cannot be changed or executed again")
 	case errors.Is(err, migration.ErrDefinitionFrozen):

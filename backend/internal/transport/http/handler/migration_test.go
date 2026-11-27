@@ -67,6 +67,7 @@ func (r migrationAccessReader) LoadAccess(_ context.Context, _ string) (authz.Us
 }
 
 type routeMigrationStore struct {
+	migration.RequestStore
 	nextMigrationID int64
 	nextRunID       int64
 	migrations      map[int64]*migration.Migration
@@ -370,6 +371,40 @@ func TestMigrationRunReconciliationRoute(t *testing.T) {
 				t.Fatalf("reconciliation should return only the execution ID and status: %s", response.Body.String())
 			}
 		})
+	}
+}
+
+type routeRequestApprover struct {
+	migration.RequestStore
+	approvedBy string
+}
+
+func (s *routeRequestApprover) ApproveMigrationRequest(_ context.Context, databaseID string, requestID int64, groupID, reviewerID string, _ time.Time) (migration.MigrationRequest, error) {
+	if databaseID != "connection-1" || requestID != 42 || groupID != "readers" {
+		return migration.MigrationRequest{}, migration.ErrNotFound
+	}
+	s.approvedBy = reviewerID
+	return migration.MigrationRequest{ID: requestID, Status: migration.RequestApproved}, nil
+}
+
+func TestMigrationRequestApprovalRouteAllowsViewOnly(t *testing.T) {
+	approver := &routeRequestApprover{}
+	store := newRouteMigrationStore()
+	store.RequestStore = approver
+	access := authz.UserAccess{
+		UserID: "reader-leader", Active: true, GroupIDs: []string{"readers"},
+		Grants: []authz.GroupGrant{{GroupID: "readers", DatabaseID: "connection-1", Level: authz.ViewOnly}},
+	}
+	service := migration.NewService(migration.AccessAuthorizer{Reader: migrationAccessReader{access: access}}, store, routeTargetConnector{}, nil)
+	api := handler.New(connectionappServiceForTest(), catalogapp.Service{}, accessapp.Service{}, migrationRouteSecurity{access: access}, service)
+	response := httptest.NewRecorder()
+	api.ServeHTTP(response, httptest.NewRequest(http.MethodPut, "/api/v1/connections/connection-1/migration-requests/42/approvals/readers", nil))
+	if response.Code != http.StatusOK || approver.approvedBy != access.UserID {
+		t.Fatalf("view-only leader should reach the approval service: %d %s", response.Code, response.Body.String())
+	}
+	var request migration.MigrationRequest
+	if err := json.Unmarshal(response.Body.Bytes(), &request); err != nil || request.ID != 42 || request.Status != migration.RequestApproved {
+		t.Fatalf("approval should return the current request: %+v, %v", request, err)
 	}
 }
 

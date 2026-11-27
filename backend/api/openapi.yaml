@@ -820,6 +820,82 @@ paths:
                 $ref: "#/components/schemas/Error"
         "500":
           $ref: "#/components/responses/OperationFailed"
+  /api/v1/connections/{id}/migrations/{migrationID}/requests:
+    post:
+      tags: [Migrations]
+      operationId: submitMigrationRequest
+      summary: Submit an operation for group leader review
+      x-required-permission: ExecuteMigration
+      parameters:
+        - $ref: "#/components/parameters/ConnectionID"
+        - $ref: "#/components/parameters/MigrationID"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [operation, revision]
+              properties:
+                operation:
+                  $ref: "#/components/schemas/MigrationRequestOperation"
+                revision:
+                  type: integer
+                  format: int64
+                  minimum: 1
+      responses:
+        "201":
+          $ref: "#/components/responses/MigrationRequestCreated"
+        "400":
+          $ref: "#/components/responses/InvalidRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: The requested revision or operation is no longer available, or the migration is irreversible.
+  /api/v1/connections/{id}/migration-requests/{requestID}:
+    get:
+      tags: [Migrations]
+      operationId: getMigrationRequest
+      summary: Read a migration request and its required approvals
+      x-required-permission: ReadMigration
+      parameters:
+        - $ref: "#/components/parameters/ConnectionID"
+        - $ref: "#/components/parameters/MigrationRequestID"
+      responses:
+        "200":
+          $ref: "#/components/responses/MigrationRequestResult"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /api/v1/connections/{id}/migration-requests/{requestID}/approvals/{groupID}:
+    put:
+      tags: [Migrations]
+      operationId: approveMigrationRequest
+      summary: Record approval from the current leader of a granted group
+      description: The final required approval completes review. The requester initiates execution separately.
+      x-required-permission: ReadMigration
+      parameters:
+        - $ref: "#/components/parameters/ConnectionID"
+        - $ref: "#/components/parameters/MigrationRequestID"
+        - $ref: "#/components/parameters/GroupID"
+      responses:
+        "200":
+          $ref: "#/components/responses/MigrationRequestResult"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: The reviewed revision or operation target changed.
   /api/v1/connections/{id}/migrations/{migrationID}/execute:
     post:
       tags: [Migrations]
@@ -1299,6 +1375,14 @@ components:
         type: integer
         format: int64
         minimum: 1
+    MigrationRequestID:
+      name: requestID
+      in: path
+      required: true
+      schema:
+        type: integer
+        format: int64
+        minimum: 1
     GroupID:
       name: groupID
       in: path
@@ -1312,6 +1396,18 @@ components:
       schema:
         type: string
   responses:
+    MigrationRequestCreated:
+      description: Migration request saved for review.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/MigrationRequest"
+    MigrationRequestResult:
+      description: Migration request and current approval status.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/MigrationRequest"
     Unauthorized:
       description: Missing or invalid session.
       content:
@@ -1577,6 +1673,54 @@ components:
           items:
             type: array
             items: {}
+    MigrationRequestOperation:
+      type: string
+      enum: [APPLY, ROLLBACK, FORWARD]
+    MigrationRequest:
+      type: object
+      required: [id, migration_id, database_id, operation, revision, sql_snapshot, requested_by, created_at, status, reviews]
+      properties:
+        id:
+          type: integer
+          format: int64
+        migration_id:
+          type: integer
+          format: int64
+        database_id:
+          type: string
+        operation:
+          $ref: "#/components/schemas/MigrationRequestOperation"
+        revision:
+          type: integer
+          format: int64
+        target_run_id:
+          type: integer
+          format: int64
+        sql_snapshot:
+          type: string
+        requested_by:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        status:
+          type: string
+          enum: [PENDING_REVIEW, APPROVED, STALE]
+        reviews:
+          type: array
+          items:
+            type: object
+            required: [group_id, group_name]
+            properties:
+              group_id:
+                type: string
+              group_name:
+                type: string
+              leader_id:
+                type: string
+              approved_at:
+                type: string
+                format: date-time
     MigrationDefinitionInput:
       type: object
       required: [sql_content]
