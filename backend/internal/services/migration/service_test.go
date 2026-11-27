@@ -561,7 +561,7 @@ func TestMigrationCommitUnconfirmedKeepsHistoryOpen(t *testing.T) {
 	}
 }
 
-func TestMigrationAuditMasksSQLValues(t *testing.T) {
+func TestMigrationAuditLogsDispatchedSQL(t *testing.T) {
 	ctx := context.Background()
 	authz := newMockAuthorizer()
 	actor := Principal{UserID: "editor"}
@@ -569,7 +569,7 @@ func TestMigrationAuditMasksSQLValues(t *testing.T) {
 	var output bytes.Buffer
 	logger := SlogAuditLogger{Logger: slog.New(slog.NewJSONHandler(&output, nil))}
 	service := NewService(authz, newInMemoryStore(), &mockTargetDB{}, logger)
-	sqlUp := "INSERT INTO private_records VALUES (918273645, 'sensitive-pass', $$private-note$$); -- confidential"
+	const sqlUp = "INSERT INTO private_records VALUES (918273645, 'sample', $$private-note$$); -- first statement\nUPDATE private_records SET note = 'second';"
 	draft, err := service.CreateDraft(ctx, actor, CreateDraftInput{
 		DatabaseID: "db", Title: "Insert test row", SQLContent: sqlUp,
 		IrreversibleReason: "No safe reversal",
@@ -581,16 +581,32 @@ func TestMigrationAuditMasksSQLValues(t *testing.T) {
 	if err != nil || result.Run.SQLSnapshot != sqlUp {
 		t.Fatalf("the recorded snapshot should retain the executed SQL: %+v, %v", result, err)
 	}
-	logs := output.String()
-	for _, field := range []string{"migration_sql_started", "migration_sql_finished", "migration_transaction_finished", "INSERT INTO ?", "COMMITTED"} {
-		if !strings.Contains(logs, field) {
-			t.Fatalf("log did not contain %q: %s", field, logs)
+	expected := map[string]string{
+		"migration_sql_started":          "RUNNING",
+		"migration_sql_finished":         "SUCCEEDED",
+		"migration_transaction_finished": "COMMITTED",
+	}
+	for _, line := range strings.Split(strings.TrimSpace(output.String()), "\n") {
+		var event struct {
+			Message string `json:"msg"`
+			Status  string `json:"status"`
+			SQL     string `json:"sql"`
+		}
+		if err := json.Unmarshal([]byte(line), &event); err != nil {
+			t.Fatal(err)
+		}
+		if status, ok := expected[event.Message]; ok {
+			if event.Status != status {
+				t.Fatalf("%s has status %q, want %q", event.Message, event.Status, status)
+			}
+			delete(expected, event.Message)
+		}
+		if (event.Message == "migration_sql_started" || event.Message == "migration_sql_finished") && event.SQL != sqlUp {
+			t.Fatalf("%s logged SQL %q, want %q", event.Message, event.SQL, sqlUp)
 		}
 	}
-	for _, secret := range []string{"private_records", "918273645", "sensitive-pass", "private-note", "confidential"} {
-		if strings.Contains(logs, secret) {
-			t.Fatalf("log exposed %q", secret)
-		}
+	if len(expected) != 0 {
+		t.Fatalf("missing audit events: %v", expected)
 	}
 }
 

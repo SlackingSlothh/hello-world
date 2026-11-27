@@ -842,19 +842,15 @@ func (s *Service) execute(ctx context.Context, principal Principal, databaseID s
 	}
 	run.SQLDispatchStarted = new(true)
 	sqlStartedAt := s.nowFn()
-	loggedSQL := ""
-	if s.audit != nil {
-		loggedSQL = redactAuditSQL(run.SQLSnapshot, tx.Dialect())
-	}
-	s.logRun(ctx, m, run, AuditEvent{Action: "migration_sql_started", Status: "RUNNING", SQL: loggedSQL}, sqlStartedAt, nil)
+	s.logRun(ctx, m, run, AuditEvent{Action: "migration_sql_started", Status: "RUNNING", SQL: run.SQLSnapshot}, sqlStartedAt, nil)
 	if err := tx.ExecSQL(ctx, run.SQLSnapshot); err != nil {
-		s.logRun(ctx, m, run, AuditEvent{Action: "migration_sql_finished", Status: "FAILED", SQL: loggedSQL}, sqlStartedAt, err)
+		s.logRun(ctx, m, run, AuditEvent{Action: "migration_sql_finished", Status: "FAILED", SQL: run.SQLSnapshot}, sqlStartedAt, err)
 		rollbackErr := tx.Rollback(ctx)
 		committed = true
 		s.logTargetRollback(ctx, m, run, rollbackErr)
 		return s.failRun(ctx, m, run, startTime, errors.Join(err, rollbackErr))
 	}
-	s.logRun(ctx, m, run, AuditEvent{Action: "migration_sql_finished", Status: "SUCCEEDED", SQL: loggedSQL}, sqlStartedAt, nil)
+	s.logRun(ctx, m, run, AuditEvent{Action: "migration_sql_finished", Status: "SUCCEEDED", SQL: run.SQLSnapshot}, sqlStartedAt, nil)
 
 	// simpan perubahan secara permanen di database target
 	if err := tx.Commit(ctx); err != nil {
