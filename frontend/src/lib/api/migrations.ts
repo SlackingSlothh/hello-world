@@ -19,6 +19,7 @@ const historyEntrySchema = z.object({
   rollback_target_run_id: z.string().optional(),
   status: z.enum(["RUNNING", "SUCCEEDED", "FAILED"]),
   sql_snapshot: z.string(),
+  sql_dispatch_started: z.boolean().nullish(),
   executed_by: z.string(),
   username: z.string(),
   started_at: z.iso.datetime({ offset: true }),

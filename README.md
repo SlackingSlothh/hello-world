@@ -1,55 +1,34 @@
 # DataDock
 
+DataDock mengelola koneksi database, akses berdasarkan grup, dan riwayat migrasi.
+
 ## Menjalankan aplikasi
 
-Siapkan Docker dan Docker Compose. Jalankan dari folder utama proyek:
+Jalankan dari root repo dengan Docker Compose.
 
 ```sh
 docker compose up -d --build
 ```
 
-Buka http://localhost, lalu login dengan akun admin default:
+Buka <http://localhost> dan masuk dengan akun lokal `admin` / `admin-local-change-me`.
+Untuk mengubah konfigurasi lokal, salin [`.env.example`](.env.example) ke `.env`.
+Jika port frontend berubah, sesuaikan `PUBLIC_ORIGIN` dan `FRONTEND_ORIGINS`.
+Gunakan kredensial dan kunci enkripsi sendiri untuk deployment.
 
-- Username: `admin`
-- Password: `admin-local-change-me`
+## Database contoh
 
-Untuk mencoba secara lokal, tidak perlu membuat `.env`. Jika ingin mengubah
-konfigurasi, salin `.env.example` menjadi `.env` sebelum menjalankan aplikasi.
-
-## Menambahkan database contoh
-
-Database contoh bioskop sudah disiapkan oleh Compose beserta datanya.
-Untuk mengaksesnya, buka **Manage connections → New connection** dan isi:
-
-- Connection name: `Bioskop`
-- Database engine: `PostgreSQL`
-- Maximum open connections: `5`
-- Maximum idle connections: `2`
-
-Isi DSN dengan:
+Buka **Connections → Add connection**, pilih PostgreSQL, dan masukkan DSN default berikut.
 
 ```text
 postgres://example_user:example_local_password@db_example:5432/example_db?sslmode=disable
 ```
 
-DSN adalah string berisi alamat database, nama database, username, dan password.
-Contoh di atas berlaku untuk konfigurasi Compose default.
+Compose mengimpor [dump bioskop](db_example/data.sql) saat volume contoh pertama
+kali diinisialisasi. Halaman **Databases** menampilkan data mock. Pengelolaan
+koneksi dan riwayat migrasi memakai API.
 
-Simpan, lalu buka **Databases** dan klik kartu Bioskop untuk melihat tabel dan data.
-Koneksi yang sudah disimpan tetap tersedia setelah aplikasi dijalankan ulang.
+## Pengembangan
 
-## Setelah mengubah kode
-
-Bangun ulang backend dan frontend:
-
-```sh
-docker compose up -d --build app frontend
-```
-
-## Menghentikan aplikasi
-
-```sh
-docker compose down
-```
-
-Perintah ini tidak menghapus data database yang tersimpan di volume Docker.
+- Bangun ulang aplikasi dengan `docker compose up -d --build app frontend`.
+- Hentikan layanan dan simpan volume dengan `docker compose down`.
+- Lihat panduan [backend](backend/README.md) dan [frontend](frontend/README.md).

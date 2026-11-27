@@ -53,6 +53,7 @@ func (h *Handler) routes() {
 	}
 	h.mux.Handle("GET /api/v1/connections", user(h.listConnections))
 	h.mux.Handle("GET /api/v1/admin/connections", admin(h.listAdminConnections))
+	h.mux.Handle("POST /api/v1/admin/connections/{id}/migration-runs/{runID}/reconcile", admin(h.reconcileMigrationRun))
 	h.mux.Handle("POST /api/v1/connections", admin(h.createConnection))
 	h.mux.Handle("GET /api/v1/connections/{id}", connectionUser(authz.ReadSchema, h.getConnection))
 	h.mux.Handle("GET /api/v1/connections/{id}/settings", admin(h.getConnection))

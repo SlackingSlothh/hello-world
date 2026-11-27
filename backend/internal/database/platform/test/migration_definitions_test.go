@@ -132,7 +132,8 @@ func TestMigrationDefinitionsAndAttemptHistory(t *testing.T) {
 		t.Fatalf("expected distinct successful retry and failed first attempt: %+v", detail.Runs)
 	}
 	for _, run := range detail.Runs {
-		if run.Revision != 2 || run.SQLSnapshot != revisedSQL || run.FinishedAt == nil {
+		if run.Revision != 2 || run.SQLSnapshot != revisedSQL || run.FinishedAt == nil ||
+			run.SQLDispatchStarted == nil || !*run.SQLDispatchStarted {
 			t.Fatalf("unexpected saved attempt: %+v", run)
 		}
 	}
@@ -152,5 +153,18 @@ func TestMigrationDefinitionsAndAttemptHistory(t *testing.T) {
 	if err != nil || len(detail.Runs) != 1 || detail.Runs[0].Status != migration.RunStatusFailed ||
 		detail.Migration.Version != nil || detail.Migration.IrreversibleReason != "No safe reversal" {
 		t.Fatalf("the target connection failure should persist in history: %+v, %v", detail, err)
+	}
+	history, err := service.ListMigrationHistory(ctx, actor, "db")
+	if err != nil || len(history) != 3 {
+		t.Fatalf("expected all three attempts in connection history: %+v, %v", history, err)
+	}
+	if entry := history[0]; entry.Status != migration.RunStatusFailed || entry.SQLSnapshot != revisedSQL ||
+		entry.SQLDispatchStarted == nil || *entry.SQLDispatchStarted {
+		t.Fatalf("connection failure should retain planned SQL without dispatch: %+v", entry)
+	}
+	for _, entry := range history[1:] {
+		if entry.SQLDispatchStarted == nil || !*entry.SQLDispatchStarted {
+			t.Fatalf("SQL attempt must be marked as dispatched: %+v", entry)
+		}
 	}
 }

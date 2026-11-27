@@ -137,6 +137,24 @@ func (h *Handler) executeMigration(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, result)
 }
 
+func (h *Handler) reconcileMigrationRun(w http.ResponseWriter, r *http.Request) {
+	principal, ok := h.migrationPrincipal(w, r)
+	if !ok {
+		return
+	}
+	runID, err := strconv.ParseInt(r.PathValue("runID"), 10, 64)
+	if err != nil || runID <= 0 {
+		writeError(w, http.StatusBadRequest, "invalid_request", "execution ID must be a positive integer")
+		return
+	}
+	result, err := h.migrations.ReconcileRun(r.Context(), principal, r.PathValue("id"), runID)
+	if err != nil {
+		writeMigrationError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
 func (h *Handler) explainMigration(w http.ResponseWriter, r *http.Request) {
 	principal, ok := h.migrationPrincipal(w, r)
 	if !ok {
