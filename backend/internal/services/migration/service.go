@@ -215,7 +215,6 @@ type TargetTx interface {
 	Rollback(ctx context.Context) error
 }
 
-// struktur data catatan aktivitas audit
 type AuditEvent struct {
 	ActorUserID   string
 	Action        string
@@ -225,13 +224,19 @@ type AuditEvent struct {
 	Status        string
 	Message       string
 	CreatedAt     time.Time
+	JobID         string
 	ExecutionID   int64
+	ExecutionUUID string
 	Operation     RunOperation
 	AttemptNumber int
+	Batch         int
 	Revision      int64
 	Version       *int64
 	DurationMs    int64
+	RowsAffected  *int64
 	SQL           string
+	Parameters    []any
+	Error         string
 	SQLState      string
 }
 

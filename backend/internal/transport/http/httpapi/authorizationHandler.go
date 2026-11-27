@@ -3,6 +3,7 @@ package httpapi
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"net/http"
 
 	"hello-world/internal/services/authz"
@@ -10,10 +11,13 @@ import (
 
 type AuthorizationHandler struct {
 	accessReader authz.AccessReader
+	logger       *slog.Logger
 }
 
-// CanAccess reports whether the identified user may perform an action on a
-// database, allowing list endpoints to hide databases without a grant.
+func (handler *AuthorizationHandler) SetLogger(logger *slog.Logger) {
+	handler.logger = logger
+}
+
 func (handler *AuthorizationHandler) CanAccess(ctx context.Context, userID string, action authz.Action, databaseID string) (bool, error) {
 	if userID == "" {
 		return false, nil
@@ -57,6 +61,15 @@ func (handler *AuthorizationHandler) RequirePermission(action authz.Action, data
 			return
 		}
 		if err := authz.Authorize(access, action, databaseID); err != nil {
+			if handler.logger != nil {
+				handler.logger.LogAttrs(request.Context(), slog.LevelWarn, "authz.denied",
+					slog.String("event", "authz.denied"),
+					slog.String("actor", identity.UserID),
+					slog.String("database", databaseID),
+					slog.String("action", string(action)),
+					slog.String("status", "denied"),
+				)
+			}
 			http.Error(writer, "access denied", http.StatusForbidden)
 			return
 		}

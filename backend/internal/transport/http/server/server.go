@@ -3,10 +3,12 @@ package server
 import (
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 	"time"
 
 	"hello-world/internal/config"
+	"hello-world/internal/observability"
 	"hello-world/internal/services/authn"
 	"hello-world/internal/services/authz"
 	"hello-world/internal/services/session"
@@ -19,6 +21,8 @@ type Dependencies struct {
 	Profiles users.ProfileReader
 	Sessions session.Store
 	Access   authz.AccessReader
+	Logger   *slog.Logger
+	Metrics  *observability.Metrics
 }
 
 type Application struct {
@@ -30,6 +34,9 @@ type Application struct {
 
 func New(config config.Config, dependencies Dependencies) (*Application, error) {
 	mux := http.NewServeMux()
+	if dependencies.Metrics != nil {
+		mux.Handle("GET /metrics", dependencies.Metrics.Handler())
+	}
 	application := &Application{
 		mux: mux,
 		HTTP: &http.Server{
@@ -77,6 +84,10 @@ func New(config config.Config, dependencies Dependencies) (*Application, error) 
 	if err != nil {
 		return nil, err
 	}
+	if dependencies.Logger != nil {
+		application.Authentication.SetLogger(dependencies.Logger)
+		application.Authorization.SetLogger(dependencies.Logger)
+	}
 	sessionStatus := http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		writer.Header().Set("Cache-Control", "no-store")
 		identity, ok := httpapi.IdentityFromContext(request.Context())
@@ -108,7 +119,7 @@ func New(config config.Config, dependencies Dependencies) (*Application, error) 
 		application.Authorization.RequirePermission(authz.ManageConnections, "", adminSessionStatus),
 	))
 	mux.Handle("/auth/", application.Authentication.Routes())
-	application.HTTP.Handler = application.Authentication.RequireSameOrigin(mux)
+	application.HTTP.Handler = WithObservability(application.Authentication.RequireSameOrigin(mux), dependencies.Logger)
 	return application, nil
 }
 

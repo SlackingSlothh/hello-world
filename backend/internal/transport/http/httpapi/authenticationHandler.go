@@ -3,6 +3,7 @@ package httpapi
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"mime"
 	"net/http"
 	"net/url"
@@ -30,6 +31,22 @@ type AuthenticationHandler struct {
 	cookies       session.Cookies
 	publicOrigin  string
 	originGuard   *http.CrossOriginProtection
+	logger        *slog.Logger
+}
+
+func (handler *AuthenticationHandler) SetLogger(logger *slog.Logger) {
+	handler.logger = logger
+}
+
+func (handler *AuthenticationHandler) logEvent(ctx context.Context, level slog.Level, event, actor, status string) {
+	if handler.logger == nil {
+		return
+	}
+	handler.logger.LogAttrs(ctx, level, event,
+		slog.String("event", event),
+		slog.String("actor", actor),
+		slog.String("status", status),
+	)
 }
 
 func NewAuthenticationHandler(authenticator Authenticator, sessions Sessions, cookies session.Cookies, publicOrigin string) (*AuthenticationHandler, error) {
