@@ -60,9 +60,11 @@ const (
 type RunOperation string
 
 const (
-	RunApply    RunOperation = "APPLY"
-	RunRollback RunOperation = "ROLLBACK"
-	RunForward  RunOperation = "FORWARD"
+	RunApply       RunOperation = "APPLY"
+	RunRollback    RunOperation = "ROLLBACK"
+	RunForward     RunOperation = "FORWARD"
+	RunResumeBatch RunOperation = "RESUME_BATCH"
+	RunRevertBatch RunOperation = "REVERT_BATCH"
 )
 
 type TargetDialect string
@@ -89,36 +91,39 @@ type Principal struct {
 	Username string
 }
 
-// representasi satu baris pada tabel migrations di database platform
 type Migration struct {
-	ID                 int64      `json:"id"`
-	DatabaseID         string     `json:"database_id"`
-	Version            *int64     `json:"version,omitempty"` // bernilai nil saat draft atau failed, berisi nomor urut saat applied
-	Title              string     `json:"title"`
-	Description        string     `json:"description"`
-	SQLContent         string     `json:"sql_content"`
-	SQLDown            string     `json:"sql_down,omitempty"`
-	IrreversibleReason string     `json:"irreversible_reason,omitempty"`
-	Revision           int64      `json:"revision"`
-	FrozenAt           *time.Time `json:"frozen_at,omitempty"`
-	Status             Status     `json:"status"`
-	CreatedBy          string     `json:"created_by"`
-	UpdatedBy          string     `json:"updated_by"`
-	CreatedAt          time.Time  `json:"created_at"`
-	UpdatedAt          time.Time  `json:"updated_at"`
-	AppliedAt          *time.Time `json:"applied_at,omitempty"`
+	ID                 int64         `json:"id"`
+	DatabaseID         string        `json:"database_id"`
+	Version            *int64        `json:"version,omitempty"`
+	Title              string        `json:"title"`
+	Description        string        `json:"description"`
+	SQLContent         string        `json:"sql_content"`
+	SQLDown            string        `json:"sql_down,omitempty"`
+	IrreversibleReason string        `json:"irreversible_reason,omitempty"`
+	ExecutionMode      ExecutionMode `json:"execution_mode"`
+	BatchByAttribute   string        `json:"batch_by_attribute,omitempty"`
+	BatchSize          *int          `json:"batch_size,omitempty"`
+	Revision           int64         `json:"revision"`
+	FrozenAt           *time.Time    `json:"frozen_at,omitempty"`
+	Status             Status        `json:"status"`
+	CreatedBy          string        `json:"created_by"`
+	UpdatedBy          string        `json:"updated_by"`
+	CreatedAt          time.Time     `json:"created_at"`
+	UpdatedAt          time.Time     `json:"updated_at"`
+	AppliedAt          *time.Time    `json:"applied_at,omitempty"`
 }
 
-// representasi satu baris riwayat percobaan pada tabel migration_runs
 type MigrationRun struct {
 	ID                  int64        `json:"id"`
 	MigrationID         int64        `json:"migration_id"`
 	DatabaseID          string       `json:"database_id"`
+	JobID               *string      `json:"job_id,omitempty"`
+	ExecutionUUID       *string      `json:"execution_uuid,omitempty"`
 	AttemptNumber       int          `json:"attempt_number"`
 	Revision            int64        `json:"revision"`
 	Operation           RunOperation `json:"operation"`
 	RollbackTargetRunID *int64       `json:"rollback_target_run_id,omitempty"`
-	SQLSnapshot         string       `json:"sql_snapshot"` // salinan sql saat percobaan dijalankan
+	SQLSnapshot         string       `json:"sql_snapshot"`
 	Status              RunStatus    `json:"status"`
 	ExecutedBy          string       `json:"executed_by"`
 	ErrorMessage        *string      `json:"error_message,omitempty"`

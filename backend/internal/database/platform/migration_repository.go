@@ -20,39 +20,44 @@ func NewPostgresStore(platformDB *sql.DB) *PostgresStore {
 	return &PostgresStore{platformDB: platformDB}
 }
 
-// CreateMigration menyimpan draf migrasi baru ke tabel migrations di Platform Database
 func (ps *PostgresStore) CreateMigration(ctx context.Context, m *migration.Migration) error {
+	mode := m.ExecutionMode
+	if mode == "" {
+		mode = migration.ModeNormal
+	}
 	const query = `
 		INSERT INTO migrations (
-			database_id, version, title, description, sql_content, sql_down, irreversible_reason, status,
+			database_id, version, title, description, sql_content, sql_down, irreversible_reason,
+			execution_mode, batch_by_attribute, batch_size, status,
 			created_by, updated_by, created_at, updated_at
-		) VALUES ($1, NULL, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+		) VALUES ($1, NULL, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
 		RETURNING id, revision
 	`
 	return ps.platformDB.QueryRowContext(
 		ctx, query,
-		m.DatabaseID, m.Title, m.Description, m.SQLContent, m.SQLDown, m.IrreversibleReason, string(m.Status),
+		m.DatabaseID, m.Title, m.Description, m.SQLContent, m.SQLDown, m.IrreversibleReason,
+		string(mode), m.BatchByAttribute, m.BatchSize, string(m.Status),
 		m.CreatedBy, m.UpdatedBy, m.CreatedAt, m.UpdatedAt,
 	).Scan(&m.ID, &m.Revision)
 }
 
-// GetMigrationByID membaca satu baris rancangan migrasi dari tabel migrations
 func (ps *PostgresStore) GetMigrationByID(ctx context.Context, migrationID int64) (*migration.Migration, error) {
 	const query = `
 		SELECT id, database_id, version, title, COALESCE(description, ''), sql_content,
-		       sql_down, irreversible_reason, revision, frozen_at,
+		       sql_down, irreversible_reason, execution_mode, batch_by_attribute, batch_size, revision, frozen_at,
 		       status, created_by, updated_by, created_at, updated_at, applied_at
 		FROM migrations
 		WHERE id = $1
 	`
 	var m migration.Migration
-	var statusStr string
+	var statusStr, modeStr string
 	var version sql.NullInt64
+	var batchSize sql.NullInt64
 	var appliedAt sql.NullTime
 
 	err := ps.platformDB.QueryRowContext(ctx, query, migrationID).Scan(
 		&m.ID, &m.DatabaseID, &version, &m.Title, &m.Description, &m.SQLContent,
-		&m.SQLDown, &m.IrreversibleReason, &m.Revision, &m.FrozenAt,
+		&m.SQLDown, &m.IrreversibleReason, &modeStr, &m.BatchByAttribute, &batchSize, &m.Revision, &m.FrozenAt,
 		&statusStr, &m.CreatedBy, &m.UpdatedBy, &m.CreatedAt, &m.UpdatedAt, &appliedAt,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -63,9 +68,14 @@ func (ps *PostgresStore) GetMigrationByID(ctx context.Context, migrationID int64
 	}
 
 	m.Status = migration.Status(statusStr)
+	m.ExecutionMode = migration.ExecutionMode(modeStr)
 	if version.Valid {
 		v := version.Int64
 		m.Version = &v
+	}
+	if batchSize.Valid {
+		v := int(batchSize.Int64)
+		m.BatchSize = &v
 	}
 	if appliedAt.Valid {
 		t := appliedAt.Time
@@ -74,11 +84,10 @@ func (ps *PostgresStore) GetMigrationByID(ctx context.Context, migrationID int64
 	return &m, nil
 }
 
-// ListMigrationsByDatabase mengambil seluruh daftar migrasi untuk suatu database_id secara berurutan
 func (ps *PostgresStore) ListMigrationsByDatabase(ctx context.Context, databaseID string) ([]migration.Migration, error) {
 	const query = `
 		SELECT id, database_id, version, title, COALESCE(description, ''), sql_content,
-		       sql_down, irreversible_reason, revision, frozen_at,
+		       sql_down, irreversible_reason, execution_mode, batch_by_attribute, batch_size, revision, frozen_at,
 		       status, created_by, updated_by, created_at, updated_at, applied_at
 		FROM migrations
 		WHERE database_id = $1
@@ -96,21 +105,27 @@ func (ps *PostgresStore) ListMigrationsByDatabase(ctx context.Context, databaseI
 	var result []migration.Migration
 	for rows.Next() {
 		var m migration.Migration
-		var statusStr string
+		var statusStr, modeStr string
 		var version sql.NullInt64
+		var batchSize sql.NullInt64
 		var appliedAt sql.NullTime
 
 		if err := rows.Scan(
 			&m.ID, &m.DatabaseID, &version, &m.Title, &m.Description, &m.SQLContent,
-			&m.SQLDown, &m.IrreversibleReason, &m.Revision, &m.FrozenAt,
+			&m.SQLDown, &m.IrreversibleReason, &modeStr, &m.BatchByAttribute, &batchSize, &m.Revision, &m.FrozenAt,
 			&statusStr, &m.CreatedBy, &m.UpdatedBy, &m.CreatedAt, &m.UpdatedAt, &appliedAt,
 		); err != nil {
 			return nil, err
 		}
 		m.Status = migration.Status(statusStr)
+		m.ExecutionMode = migration.ExecutionMode(modeStr)
 		if version.Valid {
 			v := version.Int64
 			m.Version = &v
+		}
+		if batchSize.Valid {
+			v := int(batchSize.Int64)
+			m.BatchSize = &v
 		}
 		if appliedAt.Valid {
 			t := appliedAt.Time
@@ -122,6 +137,10 @@ func (ps *PostgresStore) ListMigrationsByDatabase(ctx context.Context, databaseI
 }
 
 func (ps *PostgresStore) UpdateDraftSQL(ctx context.Context, m *migration.Migration) error {
+	mode := m.ExecutionMode
+	if mode == "" {
+		mode = migration.ModeNormal
+	}
 	const query = `
 		UPDATE migrations
 		SET title = $1,
@@ -129,14 +148,18 @@ func (ps *PostgresStore) UpdateDraftSQL(ctx context.Context, m *migration.Migrat
 		    sql_content = $3,
 		    sql_down = $4,
 		    irreversible_reason = $5,
-		    updated_by = $6,
-		    updated_at = $7,
+		    execution_mode = $6,
+		    batch_by_attribute = $7,
+		    batch_size = $8,
+		    updated_by = $9,
+		    updated_at = $10,
 		    revision = revision + 1
-		WHERE id = $8 AND revision = $9 AND frozen_at IS NULL
+		WHERE id = $11 AND revision = $12 AND frozen_at IS NULL
 		RETURNING revision
 	`
 	err := ps.platformDB.QueryRowContext(ctx, query, m.Title, m.Description, m.SQLContent,
-		m.SQLDown, m.IrreversibleReason, m.UpdatedBy, m.UpdatedAt, m.ID, m.Revision).Scan(&m.Revision)
+		m.SQLDown, m.IrreversibleReason, string(mode), m.BatchByAttribute, m.BatchSize,
+		m.UpdatedBy, m.UpdatedAt, m.ID, m.Revision).Scan(&m.Revision)
 	if errors.Is(err, sql.ErrNoRows) {
 		return migration.ErrRevisionChanged
 	}
@@ -179,8 +202,8 @@ func (ps *PostgresStore) CreateRun(ctx context.Context, run *migration.Migration
 	}
 	expectedSQL := sqlUp
 	switch run.Operation {
-	case migration.RunApply:
-		if status == migration.StatusApplied {
+	case migration.RunApply, migration.RunResumeBatch:
+		if run.Operation == migration.RunApply && status == migration.StatusApplied {
 			return migration.ErrAlreadyApplied
 		}
 	case migration.RunRollback, migration.RunForward:
@@ -193,14 +216,21 @@ func (ps *PostgresStore) CreateRun(ctx context.Context, run *migration.Migration
 			}
 			expectedSQL = sqlDown
 		}
+	case migration.RunRevertBatch:
+		if sqlDown == "" {
+			return migration.ErrIrreversible
+		}
+		expectedSQL = sqlDown
 	default:
 		return fmt.Errorf("unsupported migration operation: %q", run.Operation)
 	}
 	if run.Revision != revision || run.SQLSnapshot != expectedSQL {
 		return migration.ErrRevisionChanged
 	}
-	if err := validateRunOrder(ctx, tx, run); err != nil {
-		return err
+	if run.Operation != migration.RunResumeBatch && run.Operation != migration.RunRevertBatch {
+		if err := validateRunOrder(ctx, tx, run); err != nil {
+			return err
+		}
 	}
 	if err := tx.QueryRowContext(ctx, `SELECT COALESCE(MAX(attempt_number), 0) + 1 FROM migration_runs WHERE migration_id = $1`,
 		run.MigrationID).Scan(&run.AttemptNumber); err != nil {
@@ -212,14 +242,14 @@ func (ps *PostgresStore) CreateRun(ctx context.Context, run *migration.Migration
 
 	const query = `
 		INSERT INTO migration_runs (
-			migration_id, database_id, attempt_number, revision, operation, rollback_target_run_id, sql_snapshot,
+			migration_id, database_id, job_id, execution_uuid, attempt_number, revision, operation, rollback_target_run_id, sql_snapshot,
 			status, executed_by, execution_ms, started_at
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 0, $10)
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 0, $12)
 		RETURNING id
 	`
 	if err := tx.QueryRowContext(
 		ctx, query,
-		run.MigrationID, run.DatabaseID, run.AttemptNumber, run.Revision, run.Operation, run.RollbackTargetRunID, run.SQLSnapshot,
+		run.MigrationID, run.DatabaseID, run.JobID, run.ExecutionUUID, run.AttemptNumber, run.Revision, run.Operation, run.RollbackTargetRunID, run.SQLSnapshot,
 		string(run.Status), run.ExecutedBy, run.StartedAt,
 	).Scan(&run.ID); err != nil {
 		return err
@@ -326,19 +356,19 @@ func (ps *PostgresStore) CompleteRunSucceeded(ctx context.Context, runID, migrat
 
 	query := `SELECT version FROM migrations WHERE id = $1`
 	args := []any{migrationID}
-	if operation == migration.RunApply {
+	if operation == migration.RunApply || operation == migration.RunResumeBatch {
 		query = `
 			UPDATE migrations
-			SET version = (SELECT COALESCE(MAX(version), 0) + 1 FROM migrations WHERE database_id = $2),
+			SET version = COALESCE(version, (SELECT COALESCE(MAX(version), 0) + 1 FROM migrations WHERE database_id = $2)),
 			    status = 'APPLIED',
-			    applied_at = $3,
+			    applied_at = COALESCE(applied_at, $3),
 			    updated_at = $3
 			WHERE id = $1
 			RETURNING version
 		`
 		args = append(args, databaseID, finishedAt)
 	}
-	var version int64
+	var version sql.NullInt64
 	if err := tx.QueryRowContext(ctx, query, args...).Scan(&version); err != nil {
 		return 0, err
 	}
@@ -346,13 +376,15 @@ func (ps *PostgresStore) CompleteRunSucceeded(ctx context.Context, runID, migrat
 	if err := tx.Commit(); err != nil {
 		return 0, err
 	}
-	return version, nil
+	if version.Valid {
+		return version.Int64, nil
+	}
+	return 0, nil
 }
 
-// ListRunsByMigration mengambil seluruh riwayat percobaan eksekusi untuk suatu migration_id
 func (ps *PostgresStore) ListRunsByMigration(ctx context.Context, migrationID int64) ([]migration.MigrationRun, error) {
 	const query = `
-		SELECT id, migration_id, database_id, attempt_number, revision, operation, rollback_target_run_id, sql_snapshot,
+		SELECT id, migration_id, database_id, job_id, execution_uuid, attempt_number, revision, operation, rollback_target_run_id, sql_snapshot,
 		       status, executed_by, error_message, execution_ms, started_at, finished_at
 		FROM migration_runs
 		WHERE migration_id = $1
@@ -368,16 +400,24 @@ func (ps *PostgresStore) ListRunsByMigration(ctx context.Context, migrationID in
 	for rows.Next() {
 		var r migration.MigrationRun
 		var statusStr string
-		var errMsg sql.NullString
+		var jobID, execUUID, errMsg sql.NullString
 		var finishedAt sql.NullTime
 
 		if err := rows.Scan(
-			&r.ID, &r.MigrationID, &r.DatabaseID, &r.AttemptNumber, &r.Revision, &r.Operation, &r.RollbackTargetRunID, &r.SQLSnapshot,
+			&r.ID, &r.MigrationID, &r.DatabaseID, &jobID, &execUUID, &r.AttemptNumber, &r.Revision, &r.Operation, &r.RollbackTargetRunID, &r.SQLSnapshot,
 			&statusStr, &r.ExecutedBy, &errMsg, &r.ExecutionMs, &r.StartedAt, &finishedAt,
 		); err != nil {
 			return nil, err
 		}
 		r.Status = migration.RunStatus(statusStr)
+		if jobID.Valid {
+			v := jobID.String
+			r.JobID = &v
+		}
+		if execUUID.Valid {
+			v := execUUID.String
+			r.ExecutionUUID = &v
+		}
 		if errMsg.Valid {
 			msg := errMsg.String
 			r.ErrorMessage = &msg
