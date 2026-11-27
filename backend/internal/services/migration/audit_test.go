@@ -66,3 +66,20 @@ func TestSlogAuditLoggerStructuredAttributesAndTraceCorrelation(t *testing.T) {
 		t.Fatalf("sensitive value leaked in audit log: %s", buf.String())
 	}
 }
+
+func TestValidateTransactionalSQLRejectsInternalSchema(t *testing.T) {
+	blocked := []string{
+		"DELETE FROM _platform_internal.migration_checkpoints;",
+		`DROP SCHEMA "_platform_internal" CASCADE;`,
+		"UPDATE _PLATFORM_INTERNAL.migration_checkpoints SET rows_affected = 0;",
+		"ALTER TABLE _platform_internal.migration_checkpoints ADD COLUMN x INT;",
+	}
+	for _, query := range blocked {
+		if err := ValidateTransactionalSQL(query); err == nil {
+			t.Fatalf("expected internal schema SQL to be rejected: %s", query)
+		}
+	}
+	if err := ValidateTransactionalSQL("UPDATE notes SET label = '_platform_internal' WHERE id = 1;"); err != nil {
+		t.Fatalf("string literal should be allowed, got: %v", err)
+	}
+}

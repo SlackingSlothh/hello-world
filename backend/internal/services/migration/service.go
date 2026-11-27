@@ -252,11 +252,126 @@ func AdvisoryLockKey(databaseID string) int64 {
 	return int64(h.Sum64())
 }
 
-// memvalidasi isi sql agar tidak kosong dan tidak memakai perintah transaksi manual
+const InternalSchemaName = "_platform_internal"
+
+func ReferencesInternalSchema(rawSQL string) bool {
+	var word strings.Builder
+	check := func() bool {
+		if word.Len() == 0 {
+			return false
+		}
+		matched := strings.EqualFold(word.String(), InternalSchemaName)
+		word.Reset()
+		return matched
+	}
+	inSingle := false
+	inDouble := false
+	inBacktick := false
+	for i := 0; i < len(rawSQL); i++ {
+		c := rawSQL[i]
+		var next byte
+		if i+1 < len(rawSQL) {
+			next = rawSQL[i+1]
+		}
+		if inSingle {
+			if c == '\'' {
+				if next == '\'' {
+					i++
+					continue
+				}
+				inSingle = false
+			}
+			continue
+		}
+		if inDouble {
+			if c == '"' {
+				if next == '"' {
+					word.WriteByte('"')
+					i++
+					continue
+				}
+				inDouble = false
+				if check() {
+					return true
+				}
+				continue
+			}
+			word.WriteByte(c)
+			continue
+		}
+		if inBacktick {
+			if c == '`' {
+				if next == '`' {
+					word.WriteByte('`')
+					i++
+					continue
+				}
+				inBacktick = false
+				if check() {
+					return true
+				}
+				continue
+			}
+			word.WriteByte(c)
+			continue
+		}
+		if c == '-' && next == '-' {
+			if check() {
+				return true
+			}
+			for i+1 < len(rawSQL) && rawSQL[i+1] != '\n' {
+				i++
+			}
+			continue
+		}
+		if c == '/' && next == '*' {
+			if check() {
+				return true
+			}
+			i += 2
+			for i+1 < len(rawSQL) && !(rawSQL[i] == '*' && rawSQL[i+1] == '/') {
+				i++
+			}
+			i++
+			continue
+		}
+		if c == '\'' {
+			if check() {
+				return true
+			}
+			inSingle = true
+			continue
+		}
+		if c == '"' {
+			if check() {
+				return true
+			}
+			inDouble = true
+			continue
+		}
+		if c == '`' {
+			if check() {
+				return true
+			}
+			inBacktick = true
+			continue
+		}
+		if (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_' {
+			word.WriteByte(c)
+		} else if check() {
+			return true
+		}
+	}
+	return check()
+}
+
 func ValidateTransactionalSQL(rawSQL string) error {
 	trimmed := strings.TrimSpace(rawSQL)
 	if trimmed == "" {
 		return fmt.Errorf("%w: kueri SQL tidak boleh kosong", ErrInvalidSQL)
+	}
+	if ReferencesInternalSchema(trimmed) {
+		return fmt.Errorf("%w: skema internal %s tidak boleh diakses atau dimodifikasi", ErrInvalidSQL, InternalSchemaName)
 	}
 
 	// bersihkan komentar dan isi string sebelum mengecek kata kunci sql

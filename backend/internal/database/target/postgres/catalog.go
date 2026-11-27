@@ -81,8 +81,14 @@ func (r Reader) logQueryResult(ctx context.Context, span trace.Span, started tim
 	}
 }
 
+const internalSchemaName = "_platform_internal"
+
+func isInternalSchema(schema string) bool {
+	return strings.EqualFold(strings.TrimSpace(schema), internalSchemaName)
+}
+
 func (r Reader) Schemas(ctx context.Context) ([]dbops.Schema, error) {
-	rows, err := r.queryContext(ctx, "schemas", `SELECT schema_name FROM information_schema.schemata WHERE schema_name NOT IN ('pg_catalog','information_schema') ORDER BY schema_name`)
+	rows, err := r.queryContext(ctx, "schemas", `SELECT schema_name FROM information_schema.schemata WHERE schema_name NOT IN ('pg_catalog','information_schema','_platform_internal') ORDER BY schema_name`)
 	if err != nil {
 		return nil, err
 	}
@@ -99,6 +105,9 @@ func (r Reader) Schemas(ctx context.Context) ([]dbops.Schema, error) {
 }
 
 func (r Reader) Tables(ctx context.Context, schema string) ([]dbops.Table, error) {
+	if isInternalSchema(schema) {
+		return nil, dbops.ErrObjectNotFound
+	}
 	rows, err := r.queryContext(ctx, "tables", `SELECT table_schema,table_name,table_type FROM information_schema.tables WHERE table_schema=$1 ORDER BY table_name`, schema)
 	if err != nil {
 		return nil, err
@@ -116,6 +125,9 @@ func (r Reader) Tables(ctx context.Context, schema string) ([]dbops.Table, error
 }
 
 func (r Reader) Columns(ctx context.Context, schema, table string) ([]dbops.Column, error) {
+	if isInternalSchema(schema) {
+		return nil, dbops.ErrObjectNotFound
+	}
 	rows, err := r.queryContext(ctx, "columns", `SELECT column_name,ordinal_position,data_type,is_nullable,column_default FROM information_schema.columns WHERE table_schema=$1 AND table_name=$2 ORDER BY ordinal_position`, schema, table)
 	if err != nil {
 		return nil, err
@@ -136,6 +148,9 @@ func (r Reader) Columns(ctx context.Context, schema, table string) ([]dbops.Colu
 }
 
 func (r Reader) Constraints(ctx context.Context, schema, table string) ([]dbops.Constraint, error) {
+	if isInternalSchema(schema) {
+		return nil, dbops.ErrObjectNotFound
+	}
 	rows, err := r.queryContext(ctx, "constraints", `SELECT tc.constraint_name,tc.constraint_type,COALESCE(string_agg(kcu.column_name, ',' ORDER BY kcu.ordinal_position), ''),COALESCE(MAX(pg_get_constraintdef(pc.oid)), '') FROM information_schema.table_constraints tc LEFT JOIN information_schema.key_column_usage kcu ON tc.constraint_catalog=kcu.constraint_catalog AND tc.constraint_schema=kcu.constraint_schema AND tc.constraint_name=kcu.constraint_name AND tc.table_name=kcu.table_name LEFT JOIN pg_constraint pc ON pc.conname=tc.constraint_name AND pc.conrelid=(SELECT c.oid FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname=tc.table_schema AND c.relname=tc.table_name) WHERE tc.table_schema=$1 AND tc.table_name=$2 GROUP BY tc.constraint_name,tc.constraint_type ORDER BY tc.constraint_name`, schema, table)
 	if err != nil {
 		return nil, err
@@ -157,6 +172,9 @@ func (r Reader) Constraints(ctx context.Context, schema, table string) ([]dbops.
 }
 
 func (r Reader) Indexes(ctx context.Context, schema, table string) ([]dbops.Index, error) {
+	if isInternalSchema(schema) {
+		return nil, dbops.ErrObjectNotFound
+	}
 	rows, err := r.queryContext(ctx, "indexes", `SELECT indexname,indexdef FROM pg_indexes WHERE schemaname=$1 AND tablename=$2 ORDER BY indexname`, schema, table)
 	if err != nil {
 		return nil, err
@@ -181,6 +199,9 @@ func (r Reader) Indexes(ctx context.Context, schema, table string) ([]dbops.Inde
 }
 
 func (r Reader) Rows(ctx context.Context, schema, table string, page dbops.PageRequest) (dbops.RowsPage, error) {
+	if isInternalSchema(schema) {
+		return dbops.RowsPage{}, dbops.ErrObjectNotFound
+	}
 	cols, err := r.Columns(ctx, schema, table)
 	if err != nil {
 		return dbops.RowsPage{}, err

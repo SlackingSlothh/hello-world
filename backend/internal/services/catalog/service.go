@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"go.opentelemetry.io/otel/attribute"
@@ -15,6 +16,12 @@ import (
 	dbops "hello-world/internal/models/catalog"
 	"hello-world/internal/observability"
 )
+
+const InternalSchemaName = "_platform_internal"
+
+func isInternalSchema(schema string) bool {
+	return strings.EqualFold(strings.TrimSpace(schema), InternalSchemaName)
+}
 
 const DefaultLimit = 50
 const MaxLimit = 500
@@ -93,10 +100,22 @@ func (s Service) Schemas(ctx context.Context, id string) ([]dbops.Schema, error)
 		return nil, e
 	}
 	out, e := r.Schemas(ctx)
+	if e == nil {
+		filtered := make([]dbops.Schema, 0, len(out))
+		for _, item := range out {
+			if !isInternalSchema(item.Name) {
+				filtered = append(filtered, item)
+			}
+		}
+		out = filtered
+	}
 	s.finishOp(ctx, span, started, id, "schemas", len(out), e)
 	return out, e
 }
 func (s Service) Tables(ctx context.Context, id, schema string) ([]dbops.Table, error) {
+	if isInternalSchema(schema) {
+		return nil, dbops.ErrObjectNotFound
+	}
 	ctx, span, started := s.startOp(ctx, id, "tables")
 	r, e := s.reader(id)
 	if e != nil {
@@ -108,6 +127,9 @@ func (s Service) Tables(ctx context.Context, id, schema string) ([]dbops.Table, 
 	return out, e
 }
 func (s Service) tableReader(ctx context.Context, id, schema, table string) (CatalogReader, error) {
+	if isInternalSchema(schema) {
+		return nil, dbops.ErrObjectNotFound
+	}
 	r, err := s.reader(id)
 	if err != nil {
 		return nil, err
