@@ -284,13 +284,35 @@ func (c *dbPoolCollector) Describe(ch chan<- *prometheus.Desc) {
 }
 
 func (c *dbPoolCollector) Collect(ch chan<- prometheus.Metric) {
+	type poolKey struct {
+		poolType string
+		database string
+	}
+	order := make([]poolKey, 0)
+	aggregated := make(map[poolKey]sql.DBStats)
 	for _, snap := range c.provider() {
-		poolType := normalizeLabel(snap.PoolType)
-		database := normalizeLabel(snap.Database)
-		ch <- prometheus.MustNewConstMetric(c.openDesc, prometheus.GaugeValue, float64(snap.Stats.OpenConnections), poolType, database)
-		ch <- prometheus.MustNewConstMetric(c.inUseDesc, prometheus.GaugeValue, float64(snap.Stats.InUse), poolType, database)
-		ch <- prometheus.MustNewConstMetric(c.idleDesc, prometheus.GaugeValue, float64(snap.Stats.Idle), poolType, database)
-		ch <- prometheus.MustNewConstMetric(c.waitCountDesc, prometheus.CounterValue, float64(snap.Stats.WaitCount), poolType, database)
-		ch <- prometheus.MustNewConstMetric(c.waitDurDesc, prometheus.CounterValue, snap.Stats.WaitDuration.Seconds(), poolType, database)
+		key := poolKey{
+			poolType: normalizeLabel(snap.PoolType),
+			database: normalizeLabel(snap.Database),
+		}
+		if existing, ok := aggregated[key]; ok {
+			existing.OpenConnections += snap.Stats.OpenConnections
+			existing.InUse += snap.Stats.InUse
+			existing.Idle += snap.Stats.Idle
+			existing.WaitCount += snap.Stats.WaitCount
+			existing.WaitDuration += snap.Stats.WaitDuration
+			aggregated[key] = existing
+		} else {
+			order = append(order, key)
+			aggregated[key] = snap.Stats
+		}
+	}
+	for _, key := range order {
+		stats := aggregated[key]
+		ch <- prometheus.MustNewConstMetric(c.openDesc, prometheus.GaugeValue, float64(stats.OpenConnections), key.poolType, key.database)
+		ch <- prometheus.MustNewConstMetric(c.inUseDesc, prometheus.GaugeValue, float64(stats.InUse), key.poolType, key.database)
+		ch <- prometheus.MustNewConstMetric(c.idleDesc, prometheus.GaugeValue, float64(stats.Idle), key.poolType, key.database)
+		ch <- prometheus.MustNewConstMetric(c.waitCountDesc, prometheus.CounterValue, float64(stats.WaitCount), key.poolType, key.database)
+		ch <- prometheus.MustNewConstMetric(c.waitDurDesc, prometheus.CounterValue, stats.WaitDuration.Seconds(), key.poolType, key.database)
 	}
 }

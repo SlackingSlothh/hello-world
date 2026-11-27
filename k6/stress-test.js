@@ -8,7 +8,7 @@ const PUBLIC_ORIGIN = __ENV.PUBLIC_ORIGIN || 'http://localhost';
 const FIXTURES_PATH = __ENV.FIXTURES_PATH || './fixtures/stress-fixtures.json';
 const SUMMARY_DIR = __ENV.SUMMARY_DIR || '/scripts/results';
 
-const fixtures = JSON.parse(open(FIXTURES_PATH));
+const fixtures = JSON.parse(open(FIXTURES_PATH).replace(/^\uFEFF/, ''));
 
 const STAGE_BOUNDS = [
   { name: 'normal', startSec: 0, endSec: 50, durationSec: 50 },
@@ -103,7 +103,7 @@ const TERMINAL_STATUSES = {
   uncertain: true,
 };
 
-let vuAuthenticated = false;
+let vuSessionCookie = '';
 
 export function setup() {
   return {
@@ -123,7 +123,7 @@ function getStage(startMs) {
 }
 
 function ensureVuLogin(stage) {
-  if (vuAuthenticated) {
+  if (vuSessionCookie) {
     return true;
   }
   const body = `username=${encodeURIComponent(fixtures.runner_username)}&password=${encodeURIComponent(fixtures.runner_password)}`;
@@ -138,10 +138,11 @@ function ensureVuLogin(stage) {
   const ok = check(res, {
     'login status 204': (r) => r.status === 204,
   });
-  if (ok) {
-    vuAuthenticated = true;
+  if (ok && res.cookies && res.cookies.session_id && res.cookies.session_id.length > 0) {
+    vuSessionCookie = `session_id=${res.cookies.session_id[0].value}`;
+    http.cookieJar().clear(BASE_URL);
   }
-  return ok;
+  return Boolean(vuSessionCookie);
 }
 
 export function readApiScenario(data) {
@@ -163,6 +164,9 @@ export function readApiScenario(data) {
 
   const picked = endpoints[exec.vu.iterationInScenario % endpoints.length];
   const res = http.get(picked.url, {
+    headers: {
+      'Cookie': vuSessionCookie,
+    },
     tags: {
       scenario: 'read_api',
       stage,
@@ -200,6 +204,7 @@ export function migrationJobsScenario(data) {
     null,
     {
       headers: {
+        'Cookie': vuSessionCookie,
         'Origin': PUBLIC_ORIGIN,
         'Sec-Fetch-Site': 'same-origin',
       },
@@ -240,6 +245,9 @@ export function migrationJobsScenario(data) {
   while (Date.now() < pollDeadlineMs) {
     sleep(0.25);
     const pollRes = http.get(`${BASE_URL}/api/v1/jobs/${encodeURIComponent(jobId)}`, {
+      headers: {
+        'Cookie': vuSessionCookie,
+      },
       tags: {
         scenario: 'migration_jobs',
         endpoint: 'poll_job',
@@ -287,11 +295,13 @@ export function migrationJobsScenario(data) {
   jobE2eDurationMs.add(e2eDur, metricTags);
 
   if (stage === 'peak') {
-    sleep(0.5);
+    sleep(0.55);
   } else if (stage === 'mid') {
-    sleep(1.5);
-  } else {
+    sleep(1.6);
+  } else if (stage === 'recovery') {
     sleep(2.0);
+  } else {
+    sleep(2.5);
   }
 }
 

@@ -10,16 +10,16 @@ param(
     [string]$ExampleDbUser = "example_user",
     [string]$ExampleDbPassword = "example_local_password",
     [string]$ExampleDbHost = "db_example",
-    [int]$SameDbCount = 240,
-    [int]$DiffDb1Count = 80,
-    [int]$DiffDb2Count = 80,
+    [int]$SameDbCount = 270,
+    [int]$DiffDb1Count = 90,
+    [int]$DiffDb2Count = 90,
     [string]$OutputPath = "k6/fixtures/stress-fixtures.json"
 )
 
 $ErrorActionPreference = "Stop"
 
 if ($ExampleDbContainer -eq "") {
-    $ExampleDbContainer = (docker compose ps -q db_example | Select-Object -First 1).Trim()
+    $ExampleDbContainer = ("$(docker compose ps -q db_example | Select-Object -First 1)").Trim()
     if ($ExampleDbContainer -eq "") {
         throw "db_example container is not running; start compose stack first"
     }
@@ -36,7 +36,7 @@ $targetSpecs = @(
 
 foreach ($spec in $targetSpecs) {
     $dbName = $spec.DbName
-    $exists = (docker exec $ExampleDbContainer psql -U $ExampleDbUser -d postgres -tAc "SELECT 1 FROM pg_database WHERE datname = '$dbName';").Trim()
+    $exists = ("$(docker exec $ExampleDbContainer psql -U $ExampleDbUser -d postgres -tAc "SELECT 1 FROM pg_database WHERE datname = '$dbName';")").Trim()
     if ($exists -ne "1") {
         $null = docker exec $ExampleDbContainer psql -U $ExampleDbUser -d postgres -v ON_ERROR_STOP=1 -c "CREATE DATABASE $dbName;"
         if ($LASTEXITCODE -ne 0) { throw "failed to create database $dbName" }
@@ -231,5 +231,6 @@ $outDir = Split-Path -Parent $outFull
 if (-not (Test-Path $outDir)) {
     New-Item -ItemType Directory -Force -Path $outDir | Out-Null
 }
-$fixture | ConvertTo-Json -Depth 8 | Set-Content -Path $outFull -Encoding UTF8
+$jsonContent = $fixture | ConvertTo-Json -Depth 8
+[System.IO.File]::WriteAllText($outFull, $jsonContent, (New-Object System.Text.UTF8Encoding($false)))
 Write-Host "Wrote stress test fixtures ($($interleaved.Count) requests) to $OutputPath"

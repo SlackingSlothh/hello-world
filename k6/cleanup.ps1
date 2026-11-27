@@ -16,10 +16,10 @@ param(
 $ErrorActionPreference = "Stop"
 
 if ($PlatformDbContainer -eq "") {
-    $PlatformDbContainer = (docker compose ps -q db | Select-Object -First 1).Trim()
+    $PlatformDbContainer = ("$(docker compose ps -q db | Select-Object -First 1)").Trim()
 }
 if ($ExampleDbContainer -eq "") {
-    $ExampleDbContainer = (docker compose ps -q db_example | Select-Object -First 1).Trim()
+    $ExampleDbContainer = ("$(docker compose ps -q db_example | Select-Object -First 1)").Trim()
 }
 
 $targetNames = @("k6-target-1", "k6-target-2", "k6-target-3")

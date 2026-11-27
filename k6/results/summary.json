@@ -1,0 +1,395 @@
+{
+  "test_window_utc": {
+    "start_iso": "2026-11-27T16:31:58.265Z",
+    "end_iso": "2026-11-27T16:35:38.907Z",
+    "start_unix": 1795797118,
+    "end_unix": 1795797338,
+    "duration_ms": 220641
+  },
+  "stage_windows_utc": {
+    "normal": {
+      "start_iso": "2026-11-27T16:31:58.265Z",
+      "end_iso": "2026-11-27T16:32:48.265Z",
+      "start_unix": 1795797118,
+      "end_unix": 1795797168,
+      "duration_sec": 50
+    },
+    "mid": {
+      "start_iso": "2026-11-27T16:32:48.265Z",
+      "end_iso": "2026-11-27T16:33:38.265Z",
+      "start_unix": 1795797168,
+      "end_unix": 1795797218,
+      "duration_sec": 50
+    },
+    "peak": {
+      "start_iso": "2026-11-27T16:33:38.265Z",
+      "end_iso": "2026-11-27T16:34:38.265Z",
+      "start_unix": 1795797218,
+      "end_unix": 1795797278,
+      "duration_sec": 60
+    },
+    "recovery": {
+      "start_iso": "2026-11-27T16:34:38.265Z",
+      "end_iso": "2026-11-27T16:35:28.265Z",
+      "start_unix": 1795797278,
+      "end_unix": 1795797328,
+      "duration_sec": 50
+    }
+  },
+  "overall": {
+    "http_reqs": 22396,
+    "http_rps": 101.50418856712332,
+    "http_req_failed_rate": 0,
+    "read_api_p50_ms": 11.550006,
+    "read_api_p95_ms": 53.700645,
+    "read_api_avg_ms": 23.158489627524897,
+    "read_api_max_ms": 907.079203,
+    "jobs_completed": 450,
+    "job_failed_rate": 0,
+    "job_queue_wait_same_db_p50_ms": 226.5,
+    "job_queue_wait_same_db_p95_ms": 558.0999999999999,
+    "job_queue_wait_diff_db_p50_ms": 214.5,
+    "job_queue_wait_diff_db_p95_ms": 512.7499999999998,
+    "job_exec_p50_ms": 165.5,
+    "job_exec_p95_ms": 276,
+    "job_e2e_p50_ms": 403.5,
+    "job_e2e_p95_ms": 770.1999999999998
+  },
+  "stages": {
+    "normal": {
+      "read_api_requests": 1360,
+      "read_api_rps": 27.2,
+      "read_api_p50_ms": 9.428367999999999,
+      "read_api_p95_ms": 16.625532599999996,
+      "read_api_avg_ms": 10.249405692647063,
+      "read_api_max_ms": 58.822149,
+      "read_api_error_rate": 0,
+      "jobs_completed": 29,
+      "jobs_per_min": 34.8,
+      "job_failed_rate": 0,
+      "job_queue_wait_p50_ms": 245,
+      "job_queue_wait_p95_ms": 408.19999999999976,
+      "job_queue_wait_same_db_p50_ms": 241.5,
+      "job_queue_wait_same_db_p95_ms": 458.6499999999999,
+      "job_queue_wait_diff_db_p50_ms": 245,
+      "job_queue_wait_diff_db_p95_ms": 336,
+      "job_exec_p50_ms": 162,
+      "job_exec_p95_ms": 194.2,
+      "job_e2e_p50_ms": 401,
+      "job_e2e_p95_ms": 563.3999999999999
+    },
+    "mid": {
+      "read_api_requests": 4290,
+      "read_api_rps": 85.8,
+      "read_api_p50_ms": 8.7758775,
+      "read_api_p95_ms": 17.192561949999995,
+      "read_api_avg_ms": 9.656077960139877,
+      "read_api_max_ms": 39.885879,
+      "read_api_error_rate": 0,
+      "jobs_completed": 88,
+      "jobs_per_min": 105.6,
+      "job_failed_rate": 0,
+      "job_queue_wait_p50_ms": 186,
+      "job_queue_wait_p95_ms": 509.9,
+      "job_queue_wait_same_db_p50_ms": 196,
+      "job_queue_wait_same_db_p95_ms": 549.1999999999999,
+      "job_queue_wait_diff_db_p50_ms": 146,
+      "job_queue_wait_diff_db_p95_ms": 490.5999999999999,
+      "job_exec_p50_ms": 155.5,
+      "job_exec_p95_ms": 223.29999999999998,
+      "job_e2e_p50_ms": 329,
+      "job_e2e_p95_ms": 700.9499999999999
+    },
+    "peak": {
+      "read_api_requests": 12522,
+      "read_api_rps": 208.7,
+      "read_api_p50_ms": 20.130646,
+      "read_api_p95_ms": 66.47376339999991,
+      "read_api_avg_ms": 31.388296526034107,
+      "read_api_max_ms": 907.079203,
+      "read_api_error_rate": 0,
+      "jobs_completed": 333,
+      "jobs_per_min": 333,
+      "job_failed_rate": 0,
+      "job_queue_wait_p50_ms": 228,
+      "job_queue_wait_p95_ms": 575.9999999999998,
+      "job_queue_wait_same_db_p50_ms": 228,
+      "job_queue_wait_same_db_p95_ms": 562.0999999999998,
+      "job_queue_wait_diff_db_p50_ms": 224,
+      "job_queue_wait_diff_db_p95_ms": 575.5,
+      "job_exec_p50_ms": 171,
+      "job_exec_p95_ms": 323.5999999999999,
+      "job_e2e_p50_ms": 419,
+      "job_e2e_p95_ms": 801.5999999999997
+    },
+    "recovery": {
+      "read_api_requests": 2769,
+      "read_api_rps": 55.38,
+      "read_api_p50_ms": 10.007091,
+      "read_api_p95_ms": 36.5152038,
+      "read_api_avg_ms": 13.201125315998578,
+      "read_api_max_ms": 77.400607,
+      "read_api_error_rate": 0,
+      "jobs_completed": 0,
+      "jobs_per_min": 0,
+      "job_failed_rate": 0,
+      "job_queue_wait_p50_ms": 0,
+      "job_queue_wait_p95_ms": 0,
+      "job_queue_wait_same_db_p50_ms": 0,
+      "job_queue_wait_same_db_p95_ms": 0,
+      "job_queue_wait_diff_db_p50_ms": 0,
+      "job_queue_wait_diff_db_p95_ms": 0,
+      "job_exec_p50_ms": 0,
+      "job_exec_p95_ms": 0,
+      "job_e2e_p50_ms": 0,
+      "job_e2e_p95_ms": 0
+    }
+  },
+  "thresholds": {
+    "job_e2e_duration_ms{stage:normal}": {
+      "p(95)>=0": {
+        "ok": true
+      }
+    },
+    "job_exec_duration_ms{stage:recovery}": {
+      "p(95)>=0": {
+        "ok": true
+      }
+    },
+    "http_req_failed": {
+      "rate<0.05": {
+        "ok": true
+      }
+    },
+    "job_failed_rate{stage:mid}": {
+      "rate>=0": {
+        "ok": true
+      }
+    },
+    "job_queue_wait_ms{stage:normal}": {
+      "p(95)>=0": {
+        "ok": true
+      }
+    },
+    "jobs_completed_total{stage:mid}": {
+      "count>=0": {
+        "ok": true
+      }
+    },
+    "job_queue_wait_ms{stage:recovery}": {
+      "p(95)>=0": {
+        "ok": true
+      }
+    },
+    "job_queue_wait_ms{db_group:same_db}": {
+      "p(95)>=0": {
+        "ok": true
+      }
+    },
+    "job_exec_duration_ms{stage:peak}": {
+      "p(95)>=0": {
+        "ok": true
+      }
+    },
+    "jobs_completed_total{stage:recovery}": {
+      "count>=0": {
+        "ok": true
+      }
+    },
+    "job_queue_wait_ms{stage:mid}": {
+      "p(95)>=0": {
+        "ok": true
+      }
+    },
+    "job_failed_rate{stage:peak}": {
+      "rate>=0": {
+        "ok": true
+      }
+    },
+    "job_e2e_duration_ms{db_group:same_db}": {
+      "p(95)>=0": {
+        "ok": true
+      }
+    },
+    "job_e2e_duration_ms{stage:peak}": {
+      "p(95)>=0": {
+        "ok": true
+      }
+    },
+    "job_failed_rate{stage:normal}": {
+      "rate>=0": {
+        "ok": true
+      }
+    },
+    "read_api_requests_total{stage:peak}": {
+      "count>=0": {
+        "ok": true
+      }
+    },
+    "job_queue_wait_ms{stage:peak}": {
+      "p(95)>=0": {
+        "ok": true
+      }
+    },
+    "job_failed_rate{stage:recovery}": {
+      "rate>=0": {
+        "ok": true
+      }
+    },
+    "job_queue_wait_ms{stage:normal,db_group:diff_db}": {
+      "p(95)>=0": {
+        "ok": true
+      }
+    },
+    "read_api_requests_total{stage:normal}": {
+      "count>=0": {
+        "ok": true
+      }
+    },
+    "http_req_duration{scenario:read_api,stage:normal}": {
+      "p(95)>=0": {
+        "ok": true
+      }
+    },
+    "job_queue_wait_ms{stage:mid,db_group:same_db}": {
+      "p(95)>=0": {
+        "ok": true
+      }
+    },
+    "read_api_requests_total{stage:mid}": {
+      "count>=0": {
+        "ok": true
+      }
+    },
+    "job_e2e_duration_ms{stage:mid}": {
+      "p(95)>=0": {
+        "ok": true
+      }
+    },
+    "job_queue_wait_ms{stage:recovery,db_group:same_db}": {
+      "p(95)>=0": {
+        "ok": true
+      }
+    },
+    "job_queue_wait_ms{stage:mid,db_group:diff_db}": {
+      "p(95)>=0": {
+        "ok": true
+      }
+    },
+    "job_queue_wait_ms{stage:peak,db_group:diff_db}": {
+      "p(95)>=0": {
+        "ok": true
+      }
+    },
+    "http_req_failed{scenario:read_api,stage:normal}": {
+      "rate>=0": {
+        "ok": true
+      }
+    },
+    "job_exec_duration_ms{stage:normal}": {
+      "p(95)>=0": {
+        "ok": true
+      }
+    },
+    "job_exec_duration_ms{db_group:same_db}": {
+      "p(95)>=0": {
+        "ok": true
+      }
+    },
+    "jobs_completed_total{stage:peak}": {
+      "count>=0": {
+        "ok": true
+      }
+    },
+    "http_req_failed{scenario:read_api,stage:recovery}": {
+      "rate>=0": {
+        "ok": true
+      }
+    },
+    "http_req_failed{scenario:read_api,stage:peak}": {
+      "rate>=0": {
+        "ok": true
+      }
+    },
+    "http_req_duration{scenario:read_api,stage:recovery}": {
+      "p(95)>=0": {
+        "ok": true
+      }
+    },
+    "job_queue_wait_ms{db_group:diff_db}": {
+      "p(95)>=0": {
+        "ok": true
+      }
+    },
+    "job_queue_wait_ms{stage:peak,db_group:same_db}": {
+      "p(95)>=0": {
+        "ok": true
+      }
+    },
+    "read_api_requests_total{stage:recovery}": {
+      "count>=0": {
+        "ok": true
+      }
+    },
+    "job_queue_wait_ms{stage:recovery,db_group:diff_db}": {
+      "p(95)>=0": {
+        "ok": true
+      }
+    },
+    "jobs_completed_total{stage:normal}": {
+      "count>=0": {
+        "ok": true
+      }
+    },
+    "job_e2e_duration_ms{db_group:diff_db}": {
+      "p(95)>=0": {
+        "ok": true
+      }
+    },
+    "http_req_duration{scenario:read_api}": {
+      "p(95)<500": {
+        "ok": true
+      }
+    },
+    "job_queue_wait_ms{stage:normal,db_group:same_db}": {
+      "p(95)>=0": {
+        "ok": true
+      }
+    },
+    "job_exec_duration_ms{stage:mid}": {
+      "p(95)>=0": {
+        "ok": true
+      }
+    },
+    "http_req_duration{scenario:read_api,stage:mid}": {
+      "p(95)>=0": {
+        "ok": true
+      }
+    },
+    "http_req_duration{scenario:read_api,stage:peak}": {
+      "p(95)>=0": {
+        "ok": true
+      }
+    },
+    "job_e2e_duration_ms{stage:recovery}": {
+      "p(95)>=0": {
+        "ok": true
+      }
+    },
+    "job_failed_rate": {
+      "rate<0.05": {
+        "ok": true
+      }
+    },
+    "job_exec_duration_ms{db_group:diff_db}": {
+      "p(95)>=0": {
+        "ok": true
+      }
+    },
+    "http_req_failed{scenario:read_api,stage:mid}": {
+      "rate>=0": {
+        "ok": true
+      }
+    }
+  }
+}
