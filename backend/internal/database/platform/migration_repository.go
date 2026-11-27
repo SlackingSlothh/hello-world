@@ -151,11 +151,24 @@ func (ps *PostgresStore) CreateRun(ctx context.Context, run *migration.Migration
 	}
 	defer tx.Rollback()
 
-	var databaseID, sqlUp string
+	// The RUNNING row keeps the database reserved after this transaction commits.
+	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock($1)`, migration.AdvisoryLockKey(run.DatabaseID)); err != nil {
+		return err
+	}
+	var running bool
+	if err := tx.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM migration_runs WHERE database_id = $1 AND status = 'RUNNING')`,
+		run.DatabaseID).Scan(&running); err != nil {
+		return err
+	}
+	if running {
+		return migration.ErrMigrationLocked
+	}
+
+	var databaseID, sqlUp, sqlDown string
 	var status migration.Status
 	var revision int64
-	if err := tx.QueryRowContext(ctx, `SELECT database_id, status, revision, sql_content FROM migrations WHERE id = $1 FOR UPDATE`,
-		run.MigrationID).Scan(&databaseID, &status, &revision, &sqlUp); err != nil {
+	if err := tx.QueryRowContext(ctx, `SELECT database_id, status, revision, sql_content, sql_down FROM migrations WHERE id = $1 FOR UPDATE`,
+		run.MigrationID).Scan(&databaseID, &status, &revision, &sqlUp, &sqlDown); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return migration.ErrNotFound
 		}
@@ -164,20 +177,34 @@ func (ps *PostgresStore) CreateRun(ctx context.Context, run *migration.Migration
 	if databaseID != run.DatabaseID {
 		return migration.ErrDatabaseMismatch
 	}
-	if status == migration.StatusApplied {
-		return migration.ErrAlreadyApplied
+	expectedSQL := sqlUp
+	switch run.Operation {
+	case migration.RunApply:
+		if status == migration.StatusApplied {
+			return migration.ErrAlreadyApplied
+		}
+	case migration.RunRollback, migration.RunForward:
+		if status != migration.StatusApplied {
+			return migration.ErrMigrationOrder
+		}
+		if run.Operation == migration.RunRollback {
+			if sqlDown == "" {
+				return migration.ErrIrreversible
+			}
+			expectedSQL = sqlDown
+		}
+	default:
+		return fmt.Errorf("unsupported migration operation: %q", run.Operation)
 	}
-	if run.Revision != revision || run.SQLSnapshot != sqlUp {
+	if run.Revision != revision || run.SQLSnapshot != expectedSQL {
 		return migration.ErrRevisionChanged
 	}
-	var running bool
-	if err := tx.QueryRowContext(ctx, `SELECT COALESCE(MAX(attempt_number), 0) + 1,
-		COALESCE(bool_or(status = 'RUNNING'), FALSE) FROM migration_runs WHERE migration_id = $1`,
-		run.MigrationID).Scan(&run.AttemptNumber, &running); err != nil {
+	if err := validateRunOrder(ctx, tx, run); err != nil {
 		return err
 	}
-	if running {
-		return migration.ErrMigrationLocked
+	if err := tx.QueryRowContext(ctx, `SELECT COALESCE(MAX(attempt_number), 0) + 1 FROM migration_runs WHERE migration_id = $1`,
+		run.MigrationID).Scan(&run.AttemptNumber); err != nil {
+		return err
 	}
 	if _, err := tx.ExecContext(ctx, `UPDATE migrations SET frozen_at = $1 WHERE id = $2 AND frozen_at IS NULL`, run.StartedAt, run.MigrationID); err != nil {
 		return err
@@ -185,19 +212,54 @@ func (ps *PostgresStore) CreateRun(ctx context.Context, run *migration.Migration
 
 	const query = `
 		INSERT INTO migration_runs (
-			migration_id, database_id, attempt_number, revision, sql_snapshot,
+			migration_id, database_id, attempt_number, revision, operation, rollback_target_run_id, sql_snapshot,
 			status, executed_by, execution_ms, started_at
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, 0, $8)
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 0, $10)
 		RETURNING id
 	`
 	if err := tx.QueryRowContext(
 		ctx, query,
-		run.MigrationID, run.DatabaseID, run.AttemptNumber, run.Revision, run.SQLSnapshot,
+		run.MigrationID, run.DatabaseID, run.AttemptNumber, run.Revision, run.Operation, run.RollbackTargetRunID, run.SQLSnapshot,
 		string(run.Status), run.ExecutedBy, run.StartedAt,
 	).Scan(&run.ID); err != nil {
 		return err
 	}
 	return tx.Commit()
+}
+
+// The latest successful operation for each version determines its active state.
+func validateRunOrder(ctx context.Context, tx *sql.Tx, run *migration.MigrationRun) error {
+	const latestSuccess = `
+		SELECT m.id, latest.id
+		FROM migrations m
+		JOIN LATERAL (
+			SELECT id, operation FROM migration_runs
+			WHERE migration_id = m.id AND status = 'SUCCEEDED'
+			ORDER BY attempt_number DESC LIMIT 1
+		) latest ON TRUE
+		WHERE m.database_id = $1 AND m.version IS NOT NULL`
+	query := latestSuccess + ` AND latest.operation = 'ROLLBACK' ORDER BY m.version ASC LIMIT 1`
+	if run.Operation == migration.RunRollback {
+		query = latestSuccess + ` AND latest.operation <> 'ROLLBACK' ORDER BY m.version DESC LIMIT 1`
+	}
+	var migrationID, executionID int64
+	err := tx.QueryRowContext(ctx, query, run.DatabaseID).Scan(&migrationID, &executionID)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return err
+	}
+	if run.Operation == migration.RunApply {
+		if err == nil {
+			return fmt.Errorf("%w: forward pending on this database", migration.ErrMigrationOrder)
+		}
+		return nil
+	}
+	if err != nil || run.MigrationID != migrationID {
+		return migration.ErrMigrationOrder
+	}
+	if run.Operation == migration.RunRollback {
+		run.RollbackTargetRunID = &executionID
+	}
+	return nil
 }
 
 // CompleteRunFailed mencatat hasil percobaan yang gagal (setelah Target DB di-rollback)
@@ -234,7 +296,7 @@ func (ps *PostgresStore) CompleteRunFailed(ctx context.Context, runID, migration
 	return tx.Commit()
 }
 
-// CompleteRunSucceeded menetapkan nomor versi berikutnya
+// CompleteRunSucceeded assigns a version on first apply and preserves it on rollback and forward.
 func (ps *PostgresStore) CompleteRunSucceeded(ctx context.Context, runID, migrationID int64, databaseID string, execMs int64, finishedAt time.Time) (int64, error) {
 	tx, err := ps.platformDB.BeginTx(ctx, nil)
 	if err != nil {
@@ -248,16 +310,6 @@ func (ps *PostgresStore) CompleteRunSucceeded(ctx context.Context, runID, migrat
 		return 0, err
 	}
 
-	var nextVersion int64
-	const nextVerQuery = `
-		SELECT COALESCE(MAX(version), 0) + 1
-		FROM migrations
-		WHERE database_id = $1 AND status = 'APPLIED'
-	`
-	if err := tx.QueryRowContext(ctx, nextVerQuery, databaseID).Scan(&nextVersion); err != nil {
-		return 0, err
-	}
-
 	const updateRun = `
 		UPDATE migration_runs
 		SET status = 'SUCCEEDED',
@@ -265,34 +317,42 @@ func (ps *PostgresStore) CompleteRunSucceeded(ctx context.Context, runID, migrat
 		    execution_ms = $1,
 		    finished_at = $2
 		WHERE id = $3 AND migration_id = $4 AND database_id = $5 AND status = 'RUNNING'
-		RETURNING id
+		RETURNING operation
 	`
-	if err := tx.QueryRowContext(ctx, updateRun, execMs, finishedAt, runID, migrationID, databaseID).Scan(&runID); err != nil {
+	var operation migration.RunOperation
+	if err := tx.QueryRowContext(ctx, updateRun, execMs, finishedAt, runID, migrationID, databaseID).Scan(&operation); err != nil {
 		return 0, fmt.Errorf("finish successful migration run: %w", err)
 	}
 
-	const updateMigration = `
-		UPDATE migrations
-		SET version = $1,
-		    status = 'APPLIED',
-		    applied_at = $2,
-		    updated_at = $2
-		WHERE id = $3
-	`
-	if _, err := tx.ExecContext(ctx, updateMigration, nextVersion, finishedAt, migrationID); err != nil {
+	query := `SELECT version FROM migrations WHERE id = $1`
+	args := []any{migrationID}
+	if operation == migration.RunApply {
+		query = `
+			UPDATE migrations
+			SET version = (SELECT COALESCE(MAX(version), 0) + 1 FROM migrations WHERE database_id = $2),
+			    status = 'APPLIED',
+			    applied_at = $3,
+			    updated_at = $3
+			WHERE id = $1
+			RETURNING version
+		`
+		args = append(args, databaseID, finishedAt)
+	}
+	var version int64
+	if err := tx.QueryRowContext(ctx, query, args...).Scan(&version); err != nil {
 		return 0, err
 	}
 
 	if err := tx.Commit(); err != nil {
 		return 0, err
 	}
-	return nextVersion, nil
+	return version, nil
 }
 
 // ListRunsByMigration mengambil seluruh riwayat percobaan eksekusi untuk suatu migration_id
 func (ps *PostgresStore) ListRunsByMigration(ctx context.Context, migrationID int64) ([]migration.MigrationRun, error) {
 	const query = `
-		SELECT id, migration_id, database_id, attempt_number, revision, sql_snapshot,
+		SELECT id, migration_id, database_id, attempt_number, revision, operation, rollback_target_run_id, sql_snapshot,
 		       status, executed_by, error_message, execution_ms, started_at, finished_at
 		FROM migration_runs
 		WHERE migration_id = $1
@@ -312,7 +372,7 @@ func (ps *PostgresStore) ListRunsByMigration(ctx context.Context, migrationID in
 		var finishedAt sql.NullTime
 
 		if err := rows.Scan(
-			&r.ID, &r.MigrationID, &r.DatabaseID, &r.AttemptNumber, &r.Revision, &r.SQLSnapshot,
+			&r.ID, &r.MigrationID, &r.DatabaseID, &r.AttemptNumber, &r.Revision, &r.Operation, &r.RollbackTargetRunID, &r.SQLSnapshot,
 			&statusStr, &r.ExecutedBy, &errMsg, &r.ExecutionMs, &r.StartedAt, &finishedAt,
 		); err != nil {
 			return nil, err

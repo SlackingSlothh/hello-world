@@ -207,6 +207,7 @@ type mockTargetDB struct {
 	mu             sync.Mutex
 	shouldFailSQL  bool
 	failErrMsg     string
+	commitError    error
 	committedSQLs  []string
 	rolledBackRuns int
 	currentSchema  []TableSchema
@@ -268,7 +269,7 @@ func (tx *mockTargetTx) Commit(_ context.Context) error {
 	}
 	tx.done = true
 	tx.parent.committedSQLs = append(tx.parent.committedSQLs, tx.stagedSQLs...)
-	return nil
+	return tx.parent.commitError
 }
 
 func (tx *mockTargetTx) Rollback(_ context.Context) error {
@@ -438,6 +439,33 @@ func TestMigrationLifecycle_FailedAttemptFreezesDefinitionAndRetryKeepsHistory(t
 	}
 }
 
+func TestMigrationCommitUnconfirmedKeepsHistoryOpen(t *testing.T) {
+	ctx := context.Background()
+	authz := newMockAuthorizer()
+	store := newInMemoryStore()
+	targetDB := &mockTargetDB{commitError: errors.New("connection lost after commit")}
+	actor := Principal{UserID: "editor"}
+	authz.Grant(actor.UserID, "db", "VIEW_EDIT")
+	service := NewService(authz, store, targetDB, nil)
+	draft, err := service.CreateDraft(ctx, actor, CreateDraftInput{
+		DatabaseID: "db", Title: "Create sample", SQLContent: "CREATE TABLE samples (id INT);",
+		SQLDown: "DROP TABLE samples;",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.ExecuteMigration(ctx, actor, "db", draft.ID); !errors.Is(err, ErrOutcomeUnconfirmed) {
+		t.Fatalf("expected an unconfirmed target commit: %v", err)
+	}
+	detail, err := service.GetMigrationDetail(ctx, actor, "db", draft.ID)
+	if err != nil || len(detail.Runs) != 1 || detail.Runs[0].Status != RunStatusRunning || detail.Runs[0].FinishedAt != nil {
+		t.Fatalf("the result must stay open: %+v, %v", detail, err)
+	}
+	if len(targetDB.committedSQLs) != 1 || targetDB.rolledBackRuns != 0 {
+		t.Fatal("target SQL must not be retried or marked rolled back")
+	}
+}
+
 func TestAccessControl_ViewOnlyCannotMutateOrExecute(t *testing.T) {
 	ctx := context.Background()
 	authz := newMockAuthorizer()
@@ -481,6 +509,12 @@ func TestAccessControl_ViewOnlyCannotMutateOrExecute(t *testing.T) {
 
 	if _, err := svc.ExecuteMigration(ctx, viewer, dbA, migA.ID); !errors.Is(err, ErrForbidden) {
 		t.Fatalf("View Only seharusnya ditolak saat ExecuteMigration")
+	}
+	if _, err := svc.RollbackMigration(ctx, viewer, dbA, migA.ID); !errors.Is(err, ErrForbidden) {
+		t.Fatal("View Only cannot roll back a migration")
+	}
+	if _, err := svc.ForwardMigration(ctx, viewer, dbA, migA.ID); !errors.Is(err, ErrForbidden) {
+		t.Fatal("View Only cannot forward a migration")
 	}
 
 	if _, err := svc.ExecuteMigration(ctx, editor, dbB, migA.ID); !errors.Is(err, ErrDatabaseMismatch) {

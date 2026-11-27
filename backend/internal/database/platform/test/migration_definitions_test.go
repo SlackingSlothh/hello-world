@@ -17,7 +17,8 @@ import (
 	"hello-world/migrations"
 )
 
-func TestMigrationDefinitionsAndAttemptHistory(t *testing.T) {
+func migrationTestDatabases(t *testing.T) (*sql.DB, *sql.DB) {
+	t.Helper()
 	dsn := os.Getenv("TEST_DATABASE_DSN")
 	if dsn == "" {
 		t.Skip("set TEST_DATABASE_DSN to run PostgreSQL integration tests")
@@ -54,7 +55,12 @@ func TestMigrationDefinitionsAndAttemptHistory(t *testing.T) {
 	}
 	execSQL(t, platformDB, `INSERT INTO platform_users(id, username, password_hash) VALUES ('editor', 'editor', 'unused')`)
 	execSQL(t, platformDB, `INSERT INTO managed_db_connections(id, name, driver, dsn_ciphertext) VALUES ('db', 'Test target', 'postgres', 'unused')`)
+	return platformDB, targetDB
+}
 
+func TestMigrationDefinitionsAndAttemptHistory(t *testing.T) {
+	ctx := context.Background()
+	platformDB, targetDB := migrationTestDatabases(t)
 	actor := migration.Principal{UserID: "editor"}
 	store := persistence.NewPostgresStore(platformDB)
 	targetUnavailable := false
@@ -86,7 +92,7 @@ func TestMigrationDefinitionsAndAttemptHistory(t *testing.T) {
 
 	stale := &migration.MigrationRun{
 		MigrationID: draft.ID, DatabaseID: "db", Revision: draft.Revision, SQLSnapshot: originalSQL,
-		Status: migration.RunStatusRunning, ExecutedBy: actor.UserID, StartedAt: time.Now(),
+		Status: migration.RunStatusRunning, Operation: migration.RunApply, ExecutedBy: actor.UserID, StartedAt: time.Now(),
 	}
 	if err := store.CreateRun(ctx, stale); !errors.Is(err, migration.ErrRevisionChanged) {
 		t.Fatalf("stale execution should be rejected: %v", err)

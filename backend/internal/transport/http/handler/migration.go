@@ -194,7 +194,11 @@ func writeMigrationError(w http.ResponseWriter, err error) {
 	case errors.Is(err, migration.ErrNotFound):
 		writeError(w, http.StatusNotFound, "not_found", "migration not found")
 	case errors.Is(err, migration.ErrMigrationLocked):
-		writeError(w, http.StatusConflict, "migration_locked", "another migration is executing for this connection")
+		writeError(w, http.StatusConflict, "migration_locked", "a migration is running or awaiting outcome verification for this connection")
+	case errors.Is(err, migration.ErrOutcomeUnconfirmed):
+		writeError(w, http.StatusConflict, "migration_outcome_unconfirmed", "verify the previous execution outcome before trying again")
+	case errors.Is(err, migration.ErrMigrationOrder):
+		writeError(w, http.StatusConflict, "migration_out_of_order", "complete the pending forward migrations before applying a new one")
 	case errors.Is(err, migration.ErrAlreadyApplied):
 		writeError(w, http.StatusConflict, "migration_already_applied", "an applied migration cannot be changed or executed again")
 	case errors.Is(err, migration.ErrDefinitionFrozen):

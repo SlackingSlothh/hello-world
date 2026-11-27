@@ -23,10 +23,14 @@ var (
 	// id migrasi bukan milik database yang diminta
 	ErrDatabaseMismatch = errors.New("migration: ID migrasi tidak terdaftar pada database target tersebut")
 	// migrasi yang sudah diterapkan tidak bisa diubah atau dijalankan ulang
-	ErrAlreadyApplied    = errors.New("migration: migrasi sudah diterapkan dan tidak dapat diubah atau dijalankan ulang")
-	ErrDefinitionFrozen  = errors.New("migration: definisi sudah dikunci oleh percobaan eksekusi")
-	ErrRevisionChanged   = errors.New("migration: revisi telah berubah")
-	ErrInvalidDefinition = errors.New("migration: provide either SQL down or an irreversible reason")
+	ErrAlreadyApplied         = errors.New("migration: migrasi sudah diterapkan dan tidak dapat diubah atau dijalankan ulang")
+	ErrDefinitionFrozen       = errors.New("migration: definisi sudah dikunci oleh percobaan eksekusi")
+	ErrRevisionChanged        = errors.New("migration: revisi telah berubah")
+	ErrInvalidDefinition      = errors.New("migration: provide either SQL down or an irreversible reason")
+	ErrMigrationOrder         = errors.New("migration: operation is out of order")
+	ErrIrreversible           = errors.New("migration: this migration cannot be rolled back")
+	ErrOutcomeUnconfirmed     = errors.New("migration: outcome requires verification before this database can run another migration")
+	ErrTargetCommitRolledBack = errors.New("migration: target confirmed rollback during commit")
 	// sedang ada migrasi lain yang berjalan di database target yang sama
 	ErrMigrationLocked = errors.New("migration: sedang ada eksekusi migrasi lain yang berjalan pada database target ini")
 	// kueri sql kosong atau mengandung perintah transaksi manual
@@ -40,8 +44,8 @@ type Status string
 
 const (
 	StatusDraft   Status = "DRAFT"   // baru dibuat atau diedit dan belum pernah berhasil dieksekusi
-	StatusFailed  Status = "FAILED"  // percobaan eksekusi terakhir gagal dan masih bisa diperbaiki
-	StatusApplied Status = "APPLIED" // sudah berhasil di-commit ke database target dan terkunci
+	StatusFailed  Status = "FAILED"  // Apply failed before the migration received a version.
+	StatusApplied Status = "APPLIED" // Apply has succeeded at least once. History determines whether it is active.
 )
 
 // status setiap percobaan eksekusi pada tabel migration_runs
@@ -51,6 +55,14 @@ const (
 	RunStatusRunning   RunStatus = "RUNNING"
 	RunStatusSucceeded RunStatus = "SUCCEEDED"
 	RunStatusFailed    RunStatus = "FAILED"
+)
+
+type RunOperation string
+
+const (
+	RunApply    RunOperation = "APPLY"
+	RunRollback RunOperation = "ROLLBACK"
+	RunForward  RunOperation = "FORWARD"
 )
 
 type TargetDialect string
@@ -99,18 +111,20 @@ type Migration struct {
 
 // representasi satu baris riwayat percobaan pada tabel migration_runs
 type MigrationRun struct {
-	ID            int64      `json:"id"`
-	MigrationID   int64      `json:"migration_id"`
-	DatabaseID    string     `json:"database_id"`
-	AttemptNumber int        `json:"attempt_number"`
-	Revision      int64      `json:"revision"`
-	SQLSnapshot   string     `json:"sql_snapshot"` // salinan sql saat percobaan dijalankan
-	Status        RunStatus  `json:"status"`
-	ExecutedBy    string     `json:"executed_by"`
-	ErrorMessage  *string    `json:"error_message,omitempty"`
-	ExecutionMs   int64      `json:"execution_ms"`
-	StartedAt     time.Time  `json:"started_at"`
-	FinishedAt    *time.Time `json:"finished_at,omitempty"`
+	ID                  int64        `json:"id"`
+	MigrationID         int64        `json:"migration_id"`
+	DatabaseID          string       `json:"database_id"`
+	AttemptNumber       int          `json:"attempt_number"`
+	Revision            int64        `json:"revision"`
+	Operation           RunOperation `json:"operation"`
+	RollbackTargetRunID *int64       `json:"rollback_target_run_id,omitempty"`
+	SQLSnapshot         string       `json:"sql_snapshot"` // salinan sql saat percobaan dijalankan
+	Status              RunStatus    `json:"status"`
+	ExecutedBy          string       `json:"executed_by"`
+	ErrorMessage        *string      `json:"error_message,omitempty"`
+	ExecutionMs         int64        `json:"execution_ms"`
+	StartedAt           time.Time    `json:"started_at"`
+	FinishedAt          *time.Time   `json:"finished_at,omitempty"`
 }
 
 // gabungan data migrasi beserta daftar riwayat percobaannya
@@ -675,8 +689,19 @@ type ExecuteResult struct {
 	Run       MigrationRun `json:"run"`
 }
 
-// menjalankan sql migrasi pada database target di dalam transaksi otomatis
 func (s *Service) ExecuteMigration(ctx context.Context, principal Principal, databaseID string, migrationID int64) (*ExecuteResult, error) {
+	return s.execute(ctx, principal, databaseID, migrationID, RunApply)
+}
+
+func (s *Service) RollbackMigration(ctx context.Context, principal Principal, databaseID string, migrationID int64) (*ExecuteResult, error) {
+	return s.execute(ctx, principal, databaseID, migrationID, RunRollback)
+}
+
+func (s *Service) ForwardMigration(ctx context.Context, principal Principal, databaseID string, migrationID int64) (*ExecuteResult, error) {
+	return s.execute(ctx, principal, databaseID, migrationID, RunForward)
+}
+
+func (s *Service) execute(ctx context.Context, principal Principal, databaseID string, migrationID int64, operation RunOperation) (*ExecuteResult, error) {
 	if err := s.authorize(ctx, principal, databaseID, ActionExecuteMigration); err != nil {
 		return nil, err
 	}
@@ -685,10 +710,17 @@ func (s *Service) ExecuteMigration(ctx context.Context, principal Principal, dat
 	if err != nil {
 		return nil, err
 	}
-	if m.Status == StatusApplied {
+	if operation == RunApply && m.Status == StatusApplied {
 		return nil, ErrAlreadyApplied
 	}
-	if err := ValidateTransactionalSQL(m.SQLContent); err != nil {
+	sqlContent := m.SQLContent
+	if operation == RunRollback {
+		if m.SQLDown == "" {
+			return nil, ErrIrreversible
+		}
+		sqlContent = m.SQLDown
+	}
+	if err := ValidateTransactionalSQL(sqlContent); err != nil {
 		return nil, err
 	}
 
@@ -707,10 +739,10 @@ func (s *Service) ExecuteMigration(ctx context.Context, principal Principal, dat
 				_ = tx.Rollback(ctx)
 			}
 		}()
-		if err := ValidateTransactionalSQLForDialect(m.SQLContent, tx.Dialect()); err != nil {
+		if err := ValidateTransactionalSQLForDialect(sqlContent, tx.Dialect()); err != nil {
 			return nil, err
 		}
-		if m.SQLDown != "" {
+		if operation == RunApply && m.SQLDown != "" {
 			if err := ValidateTransactionalSQLForDialect(m.SQLDown, tx.Dialect()); err != nil {
 				return nil, fmt.Errorf("SQL down: %w", err)
 			}
@@ -722,7 +754,8 @@ func (s *Service) ExecuteMigration(ctx context.Context, principal Principal, dat
 		MigrationID: m.ID,
 		DatabaseID:  databaseID,
 		Revision:    m.Revision,
-		SQLSnapshot: m.SQLContent,
+		Operation:   operation,
+		SQLSnapshot: sqlContent,
 		Status:      RunStatusRunning,
 		ExecutedBy:  principal.UserID,
 		StartedAt:   startTime,
@@ -753,7 +786,10 @@ func (s *Service) ExecuteMigration(ctx context.Context, principal Principal, dat
 	// simpan perubahan secara permanen di database target
 	if err := tx.Commit(ctx); err != nil {
 		committed = true
-		return s.failRun(ctx, principal, m, run, startTime, fmt.Errorf("gagal melakukan commit transaksi pada database target: %w", err))
+		if errors.Is(err, ErrTargetCommitRolledBack) {
+			return s.failRun(ctx, principal, m, run, startTime, err)
+		}
+		return nil, fmt.Errorf("%w: commit target run %d: %w", ErrOutcomeUnconfirmed, run.ID, err)
 	}
 	committed = true
 
@@ -768,13 +804,15 @@ func (s *Service) ExecuteMigration(ctx context.Context, principal Principal, dat
 	defer cancel()
 	assignedVersion, err := s.store.CompleteRunSucceeded(finishCtx, run.ID, m.ID, databaseID, execMs, finishTime)
 	if err != nil {
-		return nil, fmt.Errorf("perubahan telah di-commit ke database target namun gagal memperbarui riwayat platform: %w", err)
+		return nil, fmt.Errorf("%w: target committed run %d, but recording the result failed: %w", ErrOutcomeUnconfirmed, run.ID, err)
 	}
 
-	m.Status = StatusApplied
-	m.Version = &assignedVersion
-	m.AppliedAt = &finishTime
-	m.UpdatedAt = finishTime
+	if operation == RunApply {
+		m.Status = StatusApplied
+		m.Version = &assignedVersion
+		m.AppliedAt = &finishTime
+		m.UpdatedAt = finishTime
+	}
 
 	run.Status = RunStatusSucceeded
 	run.ExecutionMs = execMs
@@ -787,7 +825,7 @@ func (s *Service) ExecuteMigration(ctx context.Context, principal Principal, dat
 		ObjectID:    m.ID,
 		DatabaseID:  databaseID,
 		Status:      "SUCCESS",
-		Message:     fmt.Sprintf("Migrasi #%d (%s) berhasil diterapkan sebagai versi v%d", m.ID, m.Title, assignedVersion),
+		Message:     fmt.Sprintf("Migrasi #%d, versi v%d: %s berhasil", m.ID, assignedVersion, operation),
 		CreatedAt:   finishTime,
 	})
 
@@ -809,12 +847,13 @@ func (s *Service) failRun(ctx context.Context, principal Principal, m *Migration
 	finishCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 	defer cancel()
 	if err := s.store.CompleteRunFailed(finishCtx, run.ID, m.ID, errMsg, execMs, finishTime); err != nil {
-		cause = errors.Join(cause, fmt.Errorf("gagal menyimpan status kegagalan: %w", err))
-		errMsg = cause.Error()
+		return nil, fmt.Errorf("%w: recording failed run %d: %w", ErrOutcomeUnconfirmed, run.ID, errors.Join(cause, err))
 	}
 
-	m.Status = StatusFailed
-	m.UpdatedAt = finishTime
+	if run.Operation == RunApply {
+		m.Status = StatusFailed
+		m.UpdatedAt = finishTime
+	}
 
 	run.Status = RunStatusFailed
 	run.ErrorMessage = &errMsg
@@ -828,7 +867,7 @@ func (s *Service) failRun(ctx context.Context, principal Principal, m *Migration
 		ObjectID:    m.ID,
 		DatabaseID:  m.DatabaseID,
 		Status:      "FAILED",
-		Message:     fmt.Sprintf("Migrasi #%d gagal dieksekusi: %s", m.ID, errMsg),
+		Message:     fmt.Sprintf("Migrasi #%d: %s gagal: %s", m.ID, run.Operation, errMsg),
 		CreatedAt:   finishTime,
 	})
 

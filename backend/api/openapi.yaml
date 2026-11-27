@@ -775,7 +775,7 @@ paths:
         "404":
           $ref: "#/components/responses/NotFound"
         "409":
-          description: Another migration is running, this migration was already applied, or its draft revision changed before execution started.
+          description: A run is in progress or awaiting outcome verification, a forward migration is pending, this migration already applied, or its draft revision changed.
           content:
             application/json:
               schema:
@@ -1566,6 +1566,7 @@ components:
         status:
           type: string
           enum: [DRAFT, FAILED, APPLIED]
+          description: APPLIED means the migration has a version. Its latest successful execution determines whether that version is active.
         created_by:
           type: string
         updated_by:
@@ -1581,7 +1582,7 @@ components:
           format: date-time
     MigrationRun:
       type: object
-      required: [id, migration_id, database_id, attempt_number, revision, sql_snapshot, status, executed_by, execution_ms, started_at]
+      required: [id, migration_id, database_id, attempt_number, revision, operation, sql_snapshot, status, executed_by, execution_ms, started_at]
       properties:
         id:
           type: integer
@@ -1597,11 +1598,19 @@ components:
           type: integer
           format: int64
           minimum: 1
+        operation:
+          type: string
+          enum: [APPLY, ROLLBACK, FORWARD]
+        rollback_target_run_id:
+          type: integer
+          format: int64
+          description: Execution targeted by a rollback attempt. The target is reverted only if the rollback succeeds.
         sql_snapshot:
           type: string
         status:
           type: string
           enum: [RUNNING, SUCCEEDED, FAILED]
+          description: A run remains RUNNING if its outcome has not yet been verified.
         executed_by:
           type: string
         error_message:
