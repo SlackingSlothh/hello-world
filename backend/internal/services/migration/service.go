@@ -689,6 +689,10 @@ func (s *Service) ConfigureAsync(jobStore JobStore, lockStore LockStore, approva
 	s.metrics = metrics
 }
 
+func (s *Service) AsyncEnabled() bool {
+	return s.jobStore != nil
+}
+
 func (s *Service) SetMaxRetries(maxRetries int) {
 	if maxRetries >= 0 {
 		s.maxRetries = maxRetries

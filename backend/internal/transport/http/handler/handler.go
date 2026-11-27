@@ -86,6 +86,12 @@ func (h *Handler) routes() {
 	h.mux.Handle("POST /api/v1/connections/{id}/migrations", connectionUser(authz.CreateMigration, h.createMigration))
 	h.mux.Handle("PATCH /api/v1/connections/{id}/migrations/{migrationID}", connectionUser(authz.UpdateMigration, h.updateMigration))
 	h.mux.Handle("POST /api/v1/connections/{id}/migrations/{migrationID}/execute", connectionUser(authz.ExecuteMigration, h.executeMigration))
+	h.mux.Handle("POST /api/v1/connections/{id}/migrations/{migrationID}/rollback", connectionUser(authz.ExecuteMigration, h.rollbackMigration))
+	h.mux.Handle("POST /api/v1/connections/{id}/migrations/{migrationID}/forward", connectionUser(authz.ExecuteMigration, h.forwardMigration))
+	h.mux.Handle("GET /api/v1/connections/{id}/jobs", connectionUser(authz.ReadMigration, h.listJobs))
+	h.mux.Handle("GET /api/v1/jobs/{jobID}", user(h.getJob))
+	h.mux.Handle("POST /api/v1/connections/{id}/jobs/{jobID}/resume", connectionUser(authz.ExecuteMigration, h.resumeBatchJob))
+	h.mux.Handle("POST /api/v1/connections/{id}/jobs/{jobID}/revert", connectionUser(authz.ExecuteMigration, h.revertBatchJob))
 	h.mux.Handle("POST /api/v1/connections/{id}/migrations/explain", connectionUser(authz.ExecuteMigration, h.explainMigration))
 	h.mux.Handle("POST /api/v1/connections/{id}/migrations/schema-diff", connectionUser(authz.ReadMigration, h.schemaDiff))
 }

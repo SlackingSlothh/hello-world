@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
@@ -17,6 +16,7 @@ import (
 	targetmigration "hello-world/internal/database/target/migration"
 	mysqlcatalog "hello-world/internal/database/target/mysql"
 	postgrescatalog "hello-world/internal/database/target/postgres"
+	"hello-world/internal/observability"
 	accessapp "hello-world/internal/services/access"
 	catalogapp "hello-world/internal/services/catalog"
 	connectionapp "hello-world/internal/services/connection"
@@ -31,6 +31,30 @@ func Run() error {
 	if err != nil {
 		return err
 	}
+	startupCtx, startupCancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer startupCancel()
+
+	telemetry, err := observability.InitTelemetry(startupCtx, observability.TelemetryConfig{
+		Exporter:     appConfig.OTELExporter,
+		OTLPEndpoint: appConfig.OTELOTLPEndpoint,
+		ServiceName:  appConfig.OTELServiceName,
+	})
+	if err != nil {
+		return err
+	}
+	defer func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = telemetry.Shutdown(shutdownCtx)
+	}()
+
+	logger := observability.NewLogger(observability.LoggerOptions{
+		Writer:       os.Stdout,
+		OTelProvider: telemetry.LoggerProvider,
+		ServiceName:  appConfig.OTELServiceName,
+	})
+	metrics := observability.NewMetrics()
+
 	storeDSN := os.Getenv("DATABASE_STORE_DSN")
 	if storeDSN == "" {
 		return errors.New("DATABASE_STORE_DSN must be configured")
@@ -40,10 +64,8 @@ func Run() error {
 		return errors.New("could not open application database")
 	}
 	defer storeDB.Close()
-	storeDB.SetMaxOpenConns(5)
-	storeDB.SetMaxIdleConns(2)
-	startupCtx, startupCancel := context.WithTimeout(context.Background(), 20*time.Second)
-	defer startupCancel()
+	storeDB.SetMaxOpenConns(10)
+	storeDB.SetMaxIdleConns(4)
 	if err := storeDB.PingContext(startupCtx); err != nil {
 		return errors.New("could not connect to application database")
 	}
@@ -73,17 +95,46 @@ func Run() error {
 		return errors.New("could not restore saved database connections")
 	}
 
-	application, err := server.New(appConfig, server.Dependencies{Users: authStore, Profiles: authStore, Sessions: sessionStore, Access: authStore})
+	_ = metrics.RegisterDBPoolCollector(func() []observability.PoolStatsSnapshot {
+		snaps := []observability.PoolStatsSnapshot{
+			{PoolType: "platform", Database: "platform", Stats: storeDB.Stats()},
+		}
+		for _, conn := range registry.List() {
+			if conn.Connected {
+				snaps = append(snaps, observability.PoolStatsSnapshot{
+					PoolType: "target",
+					Database: conn.Name,
+					Stats:    conn.Stats,
+				})
+			}
+		}
+		return snaps
+	})
+
+	application, err := server.New(appConfig, server.Dependencies{
+		Users:    authStore,
+		Profiles: authStore,
+		Sessions: sessionStore,
+		Access:   authStore,
+		Logger:   logger,
+		Metrics:  metrics,
+	})
 	if err != nil {
 		_ = registry.Close()
 		return err
 	}
-	catalogService := catalogapp.Service{Registry: registry, Readers: map[string]catalogapp.ReaderFactory{
-		"postgres": func(db *sql.DB) catalogapp.CatalogReader { return postgrescatalog.Reader{DB: db} },
-		"mysql":    func(db *sql.DB) catalogapp.CatalogReader { return mysqlcatalog.Reader{DB: db} },
-		"mariadb":  func(db *sql.DB) catalogapp.CatalogReader { return mysqlcatalog.Reader{DB: db} },
-	}}
+	catalogService := catalogapp.Service{
+		Registry: registry,
+		Logger:   logger,
+		Readers: map[string]catalogapp.ReaderFactory{
+			"postgres": func(db *sql.DB) catalogapp.CatalogReader { return postgrescatalog.Reader{DB: db, Logger: logger} },
+			"mysql":    func(db *sql.DB) catalogapp.CatalogReader { return mysqlcatalog.Reader{DB: db, Logger: logger} },
+			"mariadb":  func(db *sql.DB) catalogapp.CatalogReader { return mysqlcatalog.Reader{DB: db, Logger: logger} },
+		},
+	}
 	migrationStore := persistence.NewPostgresStore(storeDB)
+	jobStore := persistence.NewJobStore(storeDB)
+	lockStore := persistence.NewLockStore(storeDB)
 	migrationConnector := targetmigration.NewSQLTargetConnectorWithResolver(func(ctx context.Context, databaseID string) (*sql.DB, string, error) {
 		connection, db, err := registry.ConnectionDB(databaseID)
 		if err != nil {
@@ -91,8 +142,9 @@ func Run() error {
 		}
 		return db, connection.Driver, nil
 	})
-	migrationAudit := migration.SlogAuditLogger{Logger: slog.New(slog.NewJSONHandler(os.Stdout, nil))}
+	migrationAudit := migration.SlogAuditLogger{Logger: logger}
 	migrationService := migration.NewService(migration.AccessAuthorizer{Reader: authStore}, migrationStore, migrationConnector, migrationAudit)
+	migrationService.ConfigureAsync(jobStore, lockStore, migration.AllowAllApprovals{}, metrics)
 	databaseAPI := handler.New(connections, catalogService, accessapp.Service{Store: authStore, Users: authStore, Groups: authStore, Memberships: authStore}, handler.NewSecurity(application.Authentication, application.Authorization), migrationService)
 	if err := application.HandleRoute("/api/v1/", databaseAPI); err != nil {
 		_ = registry.Close()
